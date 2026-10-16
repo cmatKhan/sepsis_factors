@@ -5,24 +5,29 @@ All open items for the three packages, in one place (the per-package TODO files 
 
 ## 1. Remove the repeated code and constants (the app port copied them)
 
-`sepsisfactorsapp` was ported at schema 3 with copies of things that live in the other packages, so the
-app could be developed against the current results before the packages were fully decoupled. None of the
-copies may become a package dependency (no package imports another); each is removed by moving the work
-to where it belongs.
+`sepsisfactorsapp` was ported at schema 3 with copies of things that live in the other packages. None of the
+copies may become a package dependency (no package imports another). Status after the app moved to schema 4
+(2026-10-16):
 
-| In `sepsisfactorsapp` | Also in | How it goes away |
+| Was in `sepsisfactorsapp` | Status |
+|---|---|
+| `R/similarity.R` (`prepare_loadings()`, `pair_similarities()`, `hungarian_match*()`), live cross-method agreement | **Removed.** The app reads the precomputed `method_agreement`; `clue` and `mclust` are gone from its `Imports`. The gene-space alignment, which needed a one-to-one match, now orders axes with a greedy match on \|coefficient\| (`greedy_match_abs()`); see the open questions in 6.3. |
+| `EXPECTED_SCHEMA_VERSION` in `R/run_app.R` | **Kept as the one value to change with a schema bump**; `tests/testthat/test-run_app.R` fails when it differs from `SCHEMA_VERSION` in `sepsisfactorsdb/R/schema.R` (skipped when the sibling directory is absent). |
+| `resolve_artifact()`, `options(stability.db_dir)` | **Removed.** `R/artifacts.R` resolves the database's pointer paths relative to the database directory and is the only caller of `readRDS()`; the database is a handle passed to the functions. |
+| `METHOD_ORDER`, `METHOD_LABELS`, `METHOD_COLORS`, `EXPLORE_BLURB`, `METRICS` | **Removed**, except the metric lists: the app reads label, colour, order and blurb from the `methods` table. `STABILITY_METRICS` (cosine, pearson, spearman) is what has a stored per-factor stability; `MATCH_METRICS` adds `jaccard` for the matched-similarity queries. |
+| `config_dir`, `dataset_families.yml`, `composition_markers.yml`, `*_config.yml`, the `yaml` dependency | **Removed.** Family and timepoint order, composition markers and the documentation collection come from `datasets.family`, `family_position`, `hf_collection` and `composition_markers`. |
+| `arrow` for old metadata artifacts | **Removed.** |
+
+**Copied helpers that remain (listed so they can be kept in step):**
+
+| In `sepsisfactorsapp` | Also in | Note |
 |---|---|---|
-| `R/similarity.R` (`prepare_loadings()`, `pair_similarities()`, `hungarian_match()`, `hungarian_match_abs()`), a verbatim copy used for live cross-method agreement | `sepsisfactors/R/analysis_similarity.R` | Compute cross-method agreement (gene-set Jaccard, sample ARI, matched factors) in `sepsisfactors`, store it, and have the app read it. Then drop the copy, and the app's `clue` and `mclust` dependencies if nothing else uses them. |
-| `EXPECTED_SCHEMA_VERSION` in `R/run_app.R` | `SCHEMA_VERSION` in `sepsisfactorsdb/R/schema.R` | Store the version in the database (`PRAGMA user_version` already holds it) and keep the app's expected value as the one place that must change with a schema bump; add a test that fails when the two differ, run in CI from the monorepo. |
-| `resolve_artifact()`, the `stability_artifacts/<dataset>/<file>` layout and `options(stability.db_dir)` | `sepsisfactorsdb/R/artifacts.R` | Disappears with item 2 (no artifacts). |
-| `METHOD_ORDER`, `METRICS` and the method labels and colours | the closed method set in `sepsisfactors` (`method_manifest()`) and the `methods` table | Store display label, colour and order on the `methods` table (schema 4) and read them. |
-| Config the app reads from `config_dir`: `dataset_families.yml`, `composition_markers.yml`, per-dataset `hf_collection` | `sepsisfactors/inst/config/`, `sepsisfactors/inst/datasets/*/config.yml` | Store dataset family and timepoint order, composition markers and `hf_collection` in the database; the app then reads no files and `config_dir` is removed. |
-| Plain-comment copies of internal docs, original file names (`db_helpers.R`, `data_helpers.R`, `mod_*.R`) | n/a | Reorganise when the data-access layer is rewritten (item 2). |
-
-Order: item 2 first (it removes the artifact copy and most of what the schema review needs), then the
-agreement and config items together as part of schema 4.
+| `R/blobs.R`: `decode_f32()`, `decode_i32()`, `decode_ids()` | `sepsisfactorsdb/R/derive.R` (`decode_f32()`, `decode_i32()`; ids are `json_ids()`) | The blob format (float32/int32, column-major, little-endian, gzip) is specified in the `database` vignette of `sepsisfactorsdb`. When the derive step moves into `sepsisfactors`, the database vignette stays the contract; change both decoders if the encoding changes. |
+| `STABILITY_METRICS`, `MATCH_METRICS`, the `top 50 genes per side` figure in the notices | `sepsisfactorsdb` `TOP_GENES_PER_SIDE`, `match_scores` metric `CHECK` | The notices state the reduction; update them if the derive constants change. |
 
 ## 2. `sepsisfactorsapp` reads the SQLite database only
+
+**Status (2026-10-16): done in the app** (see 1 and 6.3); the real-database check is left to the user.
 
 Goal: the app needs the database file and nothing else. No `stability_artifacts/` directory, no
 `readRDS()`, no `options(stability.db_dir)`, no arrow workaround for old metadata files.
@@ -113,8 +118,8 @@ copy and the full artifact is used when present (pages say when data is reduced)
   it is perfectly confounded with `projection_type` (within_dataset = 0, cross_dataset = 1, no pair has both),
   so nothing mixes today; make the app filter, or the schema forbid both variants. Open analysis question
   (with the NMF/CoGAPS shift question in 6.1): within- vs cross-dataset `relative_r2` (0.67 vs 0.39) also
-  differs in intercept use. Defect to fix: the app's `METRICS` omits
-  `jaccard`, which the database stores.
+  differs in intercept use. Defect fixed in the app (2026-10-16): the matched-similarity queries accept `jaccard`
+  (`MATCH_METRICS`), and projections are filtered on `include_intercept` explicitly.
 
 ### Read from artifacts or config today (to move into the database)
 `loadings`, `scores`, `diag` (`mse_by_rank`, `sdev`), `dendrogram`, `sample_metadata`, `feature_metadata`,
@@ -187,34 +192,54 @@ Check on the cluster (phase 2):
 
 ### 6.3 `sepsisfactorsapp`
 
-Decoupling (the port copied code; section 1 and 2 remove the copies):
-- `R/similarity.R` is a verbatim copy of `sepsisfactors`' matching code; schema 4 precomputes cross-method
-  agreement, so drop it and `clue`.
-- Config from `config_dir` goes into the database (schema 4); `config_dir` is removed.
-- `options(stability.db_dir)` carries the artifact root; replace with a connection handle and an
-  `artifacts.R` that is the only `readRDS` caller.
-- `safe_query()` returning `NULL`: replace with a classed missing-table condition.
-- Bound parameters everywhere (some `IN (%s)` id pasting remains).
-- `R/` files keep their source names; internal docs are plain comments; reorganise with the data-access
-  layer rewrite.
-- `arrow` is loaded (not attached) only for old schema-1 metadata artifacts; goes away with the artifacts.
+**Done (2026-10-16, schema 4 stage, no real data used):**
+- Reads schema 4 (`EXPECTED_SCHEMA_VERSION` 4, guarded by a test against `sepsisfactorsdb`); runs from the
+  database file alone; no config files, no `config_dir`, no `yaml`.
+- Dropped `R/similarity.R`, `clue`, `mclust`, `yaml`, `arrow`; the live agreement, association scan and
+  curve computations are replaced by reads of `method_agreement`, `factor_association` and `fit_summary`.
+- One data-access layer (`db_*.R`) with bound parameters and a database handle; classed missing-table
+  condition; `artifacts.R` is the only `readRDS()` caller; reduced-data notices on the pages that lose
+  something (biplot gene arrows, Welch-test pattern drivers); gene-space alignment needs the full loadings.
+- `download_db()`.
+- Unit tests on a committed tiny fixture (`dev/make_fixture.R`); R code lint-clean.
 
-From the source repo's open items:
-- Update to schema-2 content: Time structure page on the stored variance results; flags for GSE54514
-  (annotations do not match arrays) and sex-discordant samples; refresh stale schema-1/2 strings.
+**Left to do with the real database (the user tests this):**
+- Open every page against the cluster-built database, with and without the `stability_artifacts/` folder, and
+  compare with the schema-3 app side by side: rendering, the notices, blob decoding on real shapes, the speed
+  of the reads (the benchmark says 1 to 8 ms per page read; scores, projections and agreement blobs are new
+  paths), and the memory of `datasets_info()`/`dataset_genes()` on the 20 to 50 thousand genes of a dataset.
+- Check the WGCNA eigengene column order in the `fit_scores` blob against `factors.label` (the app names the
+  columns by label in factor order; the artifact had its own names).
+- Run `download_db()` once the file is on Hugging Face.
+- Run the opt-in page tests (`STABILITY_DB=... devtools::test()`).
 
-Tests:
-- Small committed fixture database (schema 4, built by `sepsisfactorsdb`) so the page tests run without
-  `STABILITY_DB`; shinytest2 smoke tests (not installed here).
+**Open questions for the app (decisions wanted):**
+1. Gene-space alignment (Projection comparison) needs the full loadings; with the database copy it says so
+   instead of approximating with zero-filled top genes. Keep, or store more (the full loadings are 1.8 GB as
+   blobs, benchmark above)?
+2. The alignment's axis ordering used Hungarian matching (`clue`); it now uses a greedy match on |coefficient|
+   so that `clue` could go. Same result when the best matches are distinct; differs on ties. Restore `clue`?
+3. The sidebar metric stays cosine/pearson/spearman because `factors` and `fit_summary` store stability for
+   those three; `jaccard` is accepted by the matched-similarity queries (WGCNA modules). Store a Jaccard
+   stability if the sidebar should offer it everywhere.
+4. Projections: the app uses `include_intercept = 0` for within-dataset and `1` for cross-dataset
+   projections (what the pipeline computes). The open analysis question in section 5 (within vs cross
+   `relative_r2`) is unchanged.
+5. `fit_summary` and `factor_association` exist for representative fits only; the sidebar's rank list is
+   representative fits only, so nothing is lost today. A page that picks other fits would need more rows.
+6. Biplot arrows treat a gene that is outside a factor's stored top 50 per side as zero on it (the notice says
+   so). Keep, or restrict arrows to genes stored for both axes?
+
+**Still open from before:**
+- `utils::globalVariables` in `R/sepsisfactorsapp-package.R` stands in for `.data$` in the ggplot code; replace
+  when the code is refactored.
+- Update to schema-2 content: flags for GSE54514 (annotations do not match arrays) and sex-discordant
+  samples on the time page; refresh stale strings.
 - Port the remaining source `logs/dev/test_*.R` scripts (trajectory colours, projection views and scores,
-  WGCNA selection, time page).
-
-Also left for later:
-- `utils::globalVariables` in `R/sepsisfactorsapp-package.R` stands in for `.data$` in the copied ggplot
-  code; replace when the code is refactored.
-- Look at every page in a browser against the old app, side by side (only outputs were tested).
+  WGCNA selection, time page); shinytest2 smoke tests (not installed here).
+- Look at every page in a browser against the old app, side by side.
 - License, Title and Description in DESCRIPTION are placeholders (user).
-- No `air format`, no pkgdown (`air` not installed).
+- No `air format`, no pkgdown site yet.
 
 ### Payload size benchmark (2026-10-16; `results_new/bench/summary.csv`, sample per kind, ratio x total)
 Estimated database growth if the whole kind is stored in a SQLite table (35 datasets). Original `.rds` size
