@@ -39,6 +39,23 @@ library(sepsisfactorsapp)
 
 `download_db()` below needs an internet connection and nothing beyond base R.
 
+### Update during active development
+
+The package changes often and its version number (`0.0.0.9000`) does not change between commits, so
+the version cannot tell you whether you have the latest code. To be sure you get the latest commit,
+remove the installed copy and install it again. Start from a fresh R session (restart R first: a
+package that is loaded in the session cannot be replaced):
+
+```r
+pak::pkg_remove("sepsisfactorsapp")
+pak::pak("cmatKhan/sepsis_factors/sepsisfactorsapp")
+```
+
+`pkg_remove()` removes the package from the first library on `.libPaths()` (give `lib =` for
+another one) and leaves its dependencies alone. The install then takes the latest commit of the
+repository's default branch. The repository holds three packages, so any commit to it can lead to a
+new install, even if the app itself did not change.
+
 ## Get the data and run
 
 ```r
