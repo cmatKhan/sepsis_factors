@@ -51,8 +51,18 @@ Then, in the repository settings:
 - **Actions > General > Workflow permissions:** allow GitHub Actions to create and approve pull requests.
 - **Pages:** deploy from the `gh-pages` branch (it is created by the first documentation run).
 
-Locally, Claude Code uses your own login (subscription). Open the repository with `claude`; it offers to
-install the Posit plugins (`r-lib`, `shiny`, `posit-dev`, `quarto`) named in `.claude/settings.json`.
+Locally, Claude Code uses your own login (subscription). The agents and skills here rely on the Posit
+plugins `r-lib`, `shiny`, `posit-dev` and `quarto`, which `.claude/settings.json` enables from the
+`posit-dev/skills` marketplace. Claude Code may not prompt you to install them; check with `/plugin`, and if
+they are missing install them yourself:
+
+```sh
+claude plugin marketplace add posit-dev/skills
+claude plugin install r-lib@posit-dev-skills
+claude plugin install shiny@posit-dev-skills
+claude plugin install posit-dev@posit-dev-skills
+claude plugin install quarto@posit-dev-skills
+```
 
 ### What each label or comment does
 

@@ -4,15 +4,23 @@
 \alias{use_ingest}
 \title{Set up an ingest workflow in a directory}
 \usage{
-use_ingest(path = ".")
+use_ingest(path = ".", serial = FALSE)
 }
 \arguments{
 \item{path}{Directory (created if needed).}
+
+\item{serial}{Write the serial workflow instead.}
 }
 \value{
 The path of the \verb{_targets.R} file, invisibly.
 }
 \description{
-Writes a \verb{_targets.R} that runs \code{\link[=ingest_targets]{ingest_targets()}}. Edit the paths at its
-top, then run \code{targets::tar_make()}.
+By default writes the files of the parallel build (\code{\link[=ingest_parallel]{ingest_parallel()}}) next
+to each other: a \verb{_targets.R} that builds the controller from \code{ingest.yml}
+(\code{\link[=read_ingest_config]{read_ingest_config()}}, \code{\link[=ingest_controller]{ingest_controller()}}) and runs
+\code{\link[=ingest_parallel_targets]{ingest_parallel_targets()}}, the commented \code{ingest.yml}, and
+\code{run_ingest.sbatch}, which runs the main process as a SLURM job. Edit
+\code{ingest.yml}, then run \code{targets::tar_make()} (or \verb{sbatch run_ingest.sbatch}).
+With \code{serial = TRUE} it writes only the \verb{_targets.R} of the serial
+workflow (\code{\link[=ingest_targets]{ingest_targets()}}).
 }

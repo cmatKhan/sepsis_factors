@@ -9,7 +9,7 @@ the package and never write to the database. `app()` refuses any other schema ve
 - It is a port of the original app, kept behaviour-for-behaviour. The `R/` files keep their original
   names (`db_helpers.R`, `data_helpers.R`, `mod_*.R`, ...), internal documentation is plain comments, and
   `R/similarity.R` is a copy of `sepsisfactors`' matching code. Do not add a dependency on the other
-  packages; schema 4 removes the copies (see `TODO.md`, git-ignored).
+  packages; schema 4 removes the copies (see the root `TODO.md`, section 6.3).
 - Optional configuration comes from `config_dir` / `SEPSISFACTORSAPP_CONFIG`; without it the app degrades
   with a console note, never an error. Missing data is noted on the page via `notes.R`, never fatal.
 - bslib page layouts and components (`page_navbar()`, `sidebar()`, `card()`, `nav_panel()`); use the

@@ -2,7 +2,8 @@
 #'
 #' One file target per dataset over its results directory, one `db_<dataset>`
 #' target that loads it ([load_dataset()]), and `db_cross_dataset`
-#' ([load_cross_dataset()]) after all of them, so a re-run loads only the
+#' ([load_cross_dataset()]) after all of them; each load is followed by its
+#' derive step ([derive_dataset()], [derive_cross_dataset()]), so a re-run loads only the
 #' datasets whose results changed. Each load validates its dataset first
 #' ([validate_results()]). Use it in `_targets.R`, as [use_ingest()] sets up.
 #'
@@ -13,14 +14,15 @@
 #' @param results_root The results directory written by `sepsisfactors`.
 #' @param db_path Path to the SQLite file.
 #' @param datasets Dataset ids; `NULL` for all in the manifest.
-#' @param artifact_mode `"link"`, `"copy"` or `"move"`; see [load_dataset()].
+#' @param artifact_mode `"link"`, `"copy"`, `"move"` or `"symlink"`; see
+#'   [load_dataset()].
 #' @return A list of targets.
 #' @export
 ingest_targets <- function(
   results_root,
   db_path,
   datasets = NULL,
-  artifact_mode = c("link", "copy", "move")
+  artifact_mode = c("link", "copy", "move", "symlink")
 ) {
   artifact_mode <- match.arg(artifact_mode)
   ids <- datasets %||% read_manifest(results_root)$datasets
@@ -60,6 +62,7 @@ ingest_targets <- function(
           FILES
           sepsisfactorsdb::validate_results(ROOT, ID)
           sepsisfactorsdb::load_dataset(ROOT, DB, ID, MODE)
+          sepsisfactorsdb::derive_dataset(ROOT, DB, ID)
         },
         list(
           FILES = as.name(nm("results", id)),
@@ -80,6 +83,7 @@ ingest_targets <- function(
         results_cross_dataset
         sepsisfactorsdb::validate_results(ROOT, character())
         sepsisfactorsdb::load_cross_dataset(ROOT, DB, MODE)
+        sepsisfactorsdb::derive_cross_dataset(DB)
       },
       list(DEPS = deps, ROOT = results_root, DB = db_path, MODE = artifact_mode)
     )
@@ -89,19 +93,31 @@ ingest_targets <- function(
 
 #' Set up an ingest workflow in a directory
 #'
-#' Writes a `_targets.R` that runs [ingest_targets()]. Edit the paths at its
-#' top, then run `targets::tar_make()`.
+#' By default writes the files of the parallel build ([ingest_parallel()]) next
+#' to each other: a `_targets.R` that builds the controller from `ingest.yml`
+#' ([read_ingest_config()], [ingest_controller()]) and runs
+#' [ingest_parallel_targets()], the commented `ingest.yml`, and
+#' `run_ingest.sbatch`, which runs the main process as a SLURM job. Edit
+#' `ingest.yml`, then run `targets::tar_make()` (or `sbatch run_ingest.sbatch`).
+#' With `serial = TRUE` it writes only the `_targets.R` of the serial
+#' workflow ([ingest_targets()]).
 #'
 #' @param path Directory (created if needed).
+#' @param serial Write the serial workflow instead.
 #' @return The path of the `_targets.R` file, invisibly.
 #' @export
-use_ingest <- function(path = ".") {
+use_ingest <- function(path = ".", serial = FALSE) {
   dir.create(path, recursive = TRUE, showWarnings = FALSE)
-  target <- file.path(path, "_targets.R")
-  if (file.exists(target)) {
-    cli::cli_abort("{.file {target}} already exists; not overwriting it.")
+  files <- if (serial) c("_targets.R" = "_targets_serial.R") else c("_targets.R" = "_targets.R", "ingest.yml" = "ingest.yml", "run_ingest.sbatch" = "run_ingest.sbatch")
+  existing <- file.path(path, names(files))[file.exists(file.path(path, names(files)))]
+  if (length(existing)) {
+    cli::cli_abort("{.file {existing}} already exist{?s}; not overwriting {?it/them}.")
   }
-  file.copy(system.file("templates", "_targets.R", package = "sepsisfactorsdb"), target)
-  cli::cli_inform("Wrote {.file {target}}; edit the paths at its top, then run {.code targets::tar_make()}.")
+  for (i in seq_along(files)) {
+    file.copy(system.file("templates", files[[i]], package = "sepsisfactorsdb"), file.path(path, names(files)[i]))
+  }
+  Sys.chmod(file.path(path, "run_ingest.sbatch")[file.exists(file.path(path, "run_ingest.sbatch"))], "755")
+  target <- file.path(path, "_targets.R")
+  cli::cli_inform("Wrote {.file {target}}{if (!serial) ', ingest.yml and run_ingest.sbatch'}; edit the paths, then run {.code targets::tar_make()}.")
   invisible(target)
 }

@@ -1,0 +1,54 @@
+# Settings of the parallel ingest workflow (_targets.R). Paths are relative to this
+# directory, which is also the working directory of SLURM workers.
+
+# The results output written by sepsisfactors (or by legacy_to_results()).
+results_root: results
+# The database to write. It is replaced only when the whole build succeeds.
+db_path: stability/stability.sqlite
+# Dataset ids to load; null = all in the manifest.
+datasets: null
+# How artifacts get beside the database: link (hard link; copies across
+# filesystems), symlink (absolute link to the source, which must stay), copy, move.
+artifact_mode: link
+
+# Finished parts are kept here and must be visible to the main process: on a
+# cluster, a shared directory. Rebuilding reuses the parts whose dataset results did
+# not change.
+part_dir: ingest_parts
+# Where each worker builds its part (null = the worker's temporary directory; on a
+# cluster point it at node-local disk, e.g. $TMPDIR). Parts are moved to part_dir
+# when complete.
+work_dir: null
+# Where the merge builds the database before the atomic copy to db_path (null = a
+# temporary directory of the main process; use local disk).
+merge_dir: null
+# A dataset with more than this much work (fits plus pattern-driver files) has its
+# fit-level derived tables made in several chunks that run at once.
+chunk_fits: 400
+
+controller:
+  # "local" (processes on this machine) or "slurm" (crew.cluster).
+  type: local
+  # Simultaneous workers of the default controller; null = cores - 2 locally,
+  # slurm: workers below.
+  workers: null
+  seconds_idle: 30
+  slurm:
+    # null = the cluster's default partition.
+    partition: null
+    # Resources of a worker that loads one dataset or a small chunk ...
+    cpus_per_task: 1
+    memory_gigabytes_required: 8
+    time_minutes: 240
+    workers: 200
+    # Shell lines every worker runs before R starts (what puts R on the path), e.g.
+    #   setup_lines:
+    #     - module load R/4.6.1
+    setup_lines: []
+    log_dir: logs/crew
+    # ... and of a worker for a chunk of a large dataset.
+    big:
+      cpus_per_task: 2
+      memory_gigabytes_required: 32
+      time_minutes: 480
+      workers: 20

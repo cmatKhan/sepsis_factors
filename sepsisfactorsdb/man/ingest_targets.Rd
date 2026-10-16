@@ -8,7 +8,7 @@ ingest_targets(
   results_root,
   db_path,
   datasets = NULL,
-  artifact_mode = c("link", "copy", "move")
+  artifact_mode = c("link", "copy", "move", "symlink")
 )
 }
 \arguments{
@@ -18,7 +18,8 @@ ingest_targets(
 
 \item{datasets}{Dataset ids; \code{NULL} for all in the manifest.}
 
-\item{artifact_mode}{\code{"link"}, \code{"copy"} or \code{"move"}; see \code{\link[=load_dataset]{load_dataset()}}.}
+\item{artifact_mode}{\code{"link"}, \code{"copy"}, \code{"move"} or \code{"symlink"}; see
+\code{\link[=load_dataset]{load_dataset()}}.}
 }
 \value{
 A list of targets.
@@ -26,7 +27,8 @@ A list of targets.
 \description{
 One file target per dataset over its results directory, one \verb{db_<dataset>}
 target that loads it (\code{\link[=load_dataset]{load_dataset()}}), and \code{db_cross_dataset}
-(\code{\link[=load_cross_dataset]{load_cross_dataset()}}) after all of them, so a re-run loads only the
+(\code{\link[=load_cross_dataset]{load_cross_dataset()}}) after all of them; each load is followed by its
+derive step (\code{\link[=derive_dataset]{derive_dataset()}}, \code{\link[=derive_cross_dataset]{derive_cross_dataset()}}), so a re-run loads only the
 datasets whose results changed. Each load validates its dataset first
 (\code{\link[=validate_results]{validate_results()}}). Use it in \verb{_targets.R}, as \code{\link[=use_ingest]{use_ingest()}} sets up.
 }

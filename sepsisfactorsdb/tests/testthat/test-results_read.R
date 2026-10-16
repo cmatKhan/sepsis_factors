@@ -13,7 +13,7 @@ test_that("a directory without a manifest is not a results output", {
 test_that("another results-output version is refused", {
   root <- local_results()
   edit_manifest(root, function(m) {
-    m$results_output_version <- 2L
+    m$results_output_version <- 3L
     m
   })
   expect_snapshot(validate_results(root), error = TRUE, transform = scrub_tmp)

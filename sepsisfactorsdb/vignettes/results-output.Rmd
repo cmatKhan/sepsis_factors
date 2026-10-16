@@ -26,7 +26,10 @@ and fails with a clear message if the other is out of date.
 Two version numbers decide whether a results output can be loaded:
 
 - `RESULTS_OUTPUT_VERSION` (`r RESULTS_OUTPUT_VERSION`), written to `manifest.json` as
-  `results_output_version`. It changes when the layout or a table's columns change.
+  `results_output_version`. It changes when the layout or a table's columns change. Version 2 adds
+  to version 1 only optional parts: the `family`, `family_position` and `hf_collection` columns of
+  `datasets`, the cross-dataset table `composition_markers`, and the "extra" columns below (columns
+  the database no longer stores, which version 1 required and version 2 allows).
 - A `method_output_version` per method, also in the manifest. It changes when what a method
   writes changes. `supported_methods()` lists the versions this package can load.
 
@@ -43,7 +46,8 @@ loader refuses a results output containing a method or version it does not know.
     tables/<table>.parquet      dataset-level and fit-level tables
     artifacts/<file>.rds        every artifact file the tables reference
   cross_dataset/
-    tables/<table>.parquet      projections, gene_space_agreement, time_gene_recurrence
+    tables/<table>.parquet      projections, gene_space_agreement, time_gene_recurrence,
+                                composition_markers
     artifacts/<file>.rds        projection results
 ```
 
@@ -65,8 +69,16 @@ table's columns are the database table's columns (`vignette("database")`) with t
   (`fit_key`, `factor_index`), a fit pair is (`fit_a_key`, `fit_b_key`), and so on. The pair of fits
   in `fit_pairs` and `factor_matches` may be given in either order; the loader stores `fit_a < fit_b`
   by id and swaps the matched factors and counts with it.
-- **Load-time timestamps are optional.** `written_at`, `computed_at`, `queried_at` and `fitted_at`
-  are filled with the load time when the file lacks them.
+- **Optional columns.** A few contract columns may be absent (stored as `NULL`): `family`,
+  `family_position` and `hf_collection` of `datasets`. *Extra* columns may be present but are not
+  stored in the database (for example the timestamps `written_at` and `computed_at`, or the
+  per-sample expression summaries of `samples`); the loader ignores them. Display metadata of the
+  `methods` table (label, colour, order, blurb) is not part of the contract: the loader writes it.
+- **Not every results table is loaded.** `dataset_artifacts` (which file holds a dataset's sample
+  metadata, feature metadata and variance partition), `similarity_histograms`, `icasso_membership`,
+  `fit_redundancy`, `factor_variance_models` and `factor_variance` stay in the contract so the
+  results output is complete, but the database holds no table for them. The loader reads
+  `dataset_artifacts` to find the files its derive step needs.
 
 Columns holding an artifact path (listed below) contain only the **file name**, relative to the
 `artifacts/` directory next to `tables/`. The loader stores
@@ -90,7 +102,7 @@ knitr::kable(
 )
 ```
 
-Loader-filled timestamp columns, per table:
+Optional and extra columns, per table:
 
 ```{r filled, echo = FALSE}
 filled <- vapply(
@@ -103,12 +115,25 @@ knitr::kable(data.frame(table = tabs$table, optional = filled)[filled != "", ], 
 
 ## Artifacts
 
-Plain R objects only (no S4 objects), so reading them needs no package to be loaded. Per fit:
-`loadings` (genes x factors), `scores` (samples x factors), `diag`, `raw`, `dendrogram`,
-`redundancy` and `kme`. Per dataset: `matrix`, `sample_metadata`, `feature_metadata`,
-`variance_partition`, `de_results`, `composition`, `enrichment_genes` and `pattern_markers`.
-`projections.path`, `pattern_drivers.path` and `icasso_clusters.dendro_file` point to further
-files. The artifact kinds are constrained by the database schema.
+Plain R objects only (no S4 objects), so reading them needs no package to be loaded. Per fit
+(`fit_artifacts`): `loadings` (genes x factors), `scores` (samples x factors), `diag` and, for WGCNA
+fits built in one block, `dendrogram`. Per dataset (`dataset_artifacts`): `sample_metadata`,
+`feature_metadata` and, where a variance partition was fitted, `variance_partition` (a list with
+`gene_summary`). `projections.path` and `pattern_drivers.path` point to further files. Any other
+file a writer keeps (raw fits, kME matrices, ...) is not read.
+
+The database keeps pointers only to `loadings`, `scores`, the pattern-driver files and the
+projection files (the *full* artifacts, optional when the app runs). The loader's **derive step**
+reads the rest from the results output at load time and stores reduced copies in the database
+(`vignette("database")`): the feature metadata numbers the genes, `diag` and `dendrogram` become
+`fit_diag` and `wgcna_dendrograms`, the sample metadata becomes `sample_metadata`, and
+`variance_partition$gene_summary` becomes `gene_variance`. Gene ids in loadings, driver results,
+dendrograms and the variance partition must be ids (or, for the variance partition, symbols) of
+the dataset's `feature_metadata`; an id that is not there is an error. A pattern-driver file holds
+the projectionDriveR result: `weighted_mean_stats` and `sig_genes$PV_significant_shared_genes`
+(mode `PV`), or `weighted_mean_ci` and `sig_genes$significant_shared_genes` (mode `CI`), and
+`normalized_weights`. A projection file holds `projection` (components x samples, with row and
+column names) and, when available, `pval` (same shape) and `r_squared` (one per sample).
 
 Sample and feature metadata are plain data frames (no Arrow-backed columns).
 
@@ -156,13 +181,15 @@ Beyond the checks, each method has conventions that readers rely on:
 
 ## Loading
 
-`ingest_results()` validates (`validate_results()`), then loads each dataset (`load_dataset()`) and
-the cross-dataset tables (`load_cross_dataset()`):
+`ingest_results()` validates (`validate_results()`), then loads each dataset (`load_dataset()`),
+builds its derived tables (`derive_dataset()`), loads the cross-dataset tables
+(`load_cross_dataset()`) and builds the projection values (`derive_cross_dataset()`):
 
 ```{r load}
 db <- file.path(tempfile("db-"), "stability.sqlite")
 res <- suppressMessages(ingest_results(results, db))
 res$datasets$TOY1$fits
+res$derived$TOY1
 ```
 
 A results output that fails validation is rejected before anything is written. The errors carry a
@@ -174,6 +201,14 @@ unlink(file.path(results, "datasets", "TOY1", "tables", "gene_modules.parquet"))
 validate_results(results)
 ```
 
-Artifact files are placed into `<db dir>/stability_artifacts/<dataset_id>/` by hard link (the
-default, copying across filesystems), copy or move (`artifact_mode`). The results output is never
-modified, except that `"move"` takes its files.
+The pointer artifacts are placed into `<db dir>/stability_artifacts/<dataset_id>/` by hard link
+(the default, copying across filesystems), copy, move or symbolic link (`artifact_mode`; a symbolic
+link is absolute, so the results must stay where they are, which is the choice when they sit on
+another filesystem). The results output is never modified, except that `"move"` takes its files.
+
+## Temporary: converting the original project's output
+
+Until `sepsisfactors` writes this contract itself, `legacy_to_results()` reshapes the original
+project's schema-3 database and `stability_artifacts/` tree into a results output (natural keys for
+ids, the dataset families and composition markers from a `sepsisfactors/inst`-style config
+directory). It computes nothing and goes when the writer catches up (see the root `TODO.md`).

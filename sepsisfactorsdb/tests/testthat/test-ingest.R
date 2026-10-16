@@ -16,7 +16,8 @@ test_that("example results load completely and consistently", {
   expect_equal(db_count(db, "projections"), 1)
   expect_equal(db_count(db, "gene_space_agreement"), 1)
   expect_equal(db_count(db, "enrichment_results"), 2)
-  expect_equal(db_count(db, "icasso_membership"), 6)
+  expect_equal(db_count(db, "projection_values"), 1)
+  expect_equal(db_count(db, "composition_markers"), 3)
 })
 
 test_that("pairs are stored with fit_a < fit_b and their factors swapped with them", {
@@ -44,9 +45,8 @@ test_that("artifact paths are stored relative to the database and files exist", 
   root <- local_results()
   db <- local_db()
   ingest_results(root, db)
-  paths <- db_query(db, "SELECT path FROM fit_artifacts UNION SELECT path FROM dataset_artifacts
-                         UNION SELECT path FROM projections UNION SELECT path FROM pattern_drivers
-                         UNION SELECT dendro_file FROM icasso_clusters")$path
+  paths <- db_query(db, "SELECT path FROM fit_artifacts UNION SELECT path FROM projections
+                         UNION SELECT path FROM pattern_drivers")$path
   expect_true(all(startsWith(paths, "stability_artifacts/")))
   expect_true(all(file.exists(resolve_artifact(paths, db))))
   # projections live with their source dataset
@@ -79,13 +79,28 @@ test_that("a fit dropped from the results is dropped from the database", {
   expect_false(any(grepl(drop, list.files(artifacts_dir(db, "TOY1")))))
 })
 
+test_that("only the pointer artifacts are placed in the database tree", {
+  root <- local_results()
+  db <- local_db()
+  ingest_results(root, db)
+  placed <- list.files(artifacts_dir(db, "TOY1"))
+  expect_false(any(grepl("_diag\\.rds$|dendrogram|matrix|metadata", placed)))
+  expect_true(any(grepl("_loadings\\.rds$", placed)))
+  expect_true(any(grepl("_scores\\.rds$", placed)))
+})
+
 test_that("artifact modes all work and move empties the results", {
-  for (mode in c("link", "copy", "move")) {
+  for (mode in c("link", "copy", "move", "symlink")) {
     root <- local_results()
     db <- local_db()
+    loadings <- list.files(file.path(root, "datasets", "TOY1", "artifacts"), pattern = "_loadings\\.rds$")[1]
     ingest_results(root, db, artifact_mode = mode)
-    expect_true(file.exists(file.path(artifacts_dir(db, "TOY1"), "matrix.rds")))
-    expect_equal(file.exists(file.path(root, "datasets", "TOY1", "artifacts", "matrix.rds")), mode != "move")
+    expect_true(file.exists(file.path(artifacts_dir(db, "TOY1"), loadings)))
+    expect_equal(file.exists(file.path(root, "datasets", "TOY1", "artifacts", loadings)), mode != "move")
+    if (mode == "symlink") {
+      link <- file.path(artifacts_dir(db, "TOY1"), loadings)
+      expect_equal(unname(Sys.readlink(link)), normalizePath(file.path(root, "datasets", "TOY1", "artifacts", loadings)))
+    }
   }
 })
 
@@ -97,7 +112,7 @@ test_that("orphan cleanup removes unreferenced files in the database tree only",
   saveRDS(1, stray)
   ingest_results(root, db)
   expect_false(file.exists(stray))
-  expect_true(file.exists(file.path(root, "datasets", "TOY1", "artifacts", "matrix.rds")))
+  expect_true(length(list.files(file.path(root, "datasets", "TOY1", "artifacts"), pattern = "_loadings")) > 0)
 })
 
 test_that("projections onto a dataset that is not loaded are refused", {

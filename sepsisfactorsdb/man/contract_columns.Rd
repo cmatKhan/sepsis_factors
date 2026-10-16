@@ -9,7 +9,7 @@ contract_columns(table, include_optional = FALSE)
 \arguments{
 \item{table}{A table name (see \code{\link[=results_tables]{results_tables()}}).}
 
-\item{include_optional}{Also return the loader-filled columns.}
+\item{include_optional}{Also return the optional columns.}
 }
 \value{
 Character vector of column names.
@@ -17,7 +17,7 @@ Character vector of column names.
 \description{
 The columns a results-output Parquet file must have: the schema table's
 columns, minus its surrogate ids, plus the natural-key columns that replace
-them (listed first). Columns the loader fills with the load time
-(\code{written_at}, \code{computed_at}, \code{queried_at}, \code{fitted_at}) are optional and
-not returned unless \code{include_optional = TRUE}.
+them (listed first). Columns a file may omit (optional contract columns, and
+columns the database does not store) are not returned unless
+\code{include_optional = TRUE}.
 }

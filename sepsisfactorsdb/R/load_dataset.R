@@ -16,21 +16,20 @@ VARIANCE_DATASET_TABLES <- c(
   "trait_variance",
   "composition_correlations",
   "de_contrasts",
-  "factor_variance_models",
   "variance_time_genes"
 )
 
-#' Add the load-time columns a results table may omit
+#' Keep the columns of a results table that the database stores
+#'
+#' Results tables may carry columns the database does not hold (the `extra`
+#' columns of the contract) or leave out optional ones, which stay `NULL`.
 #'
 #' @param df A results table.
 #' @param table Its name.
-#' @param now The load time.
+#' @param keep Natural-key columns to keep as well, for resolving to ids.
 #' @noRd
-fill_loader_columns <- function(df, table, now) {
-  for (col in RESULT_TABLES[[table]]$fill) {
-    if (!col %in% names(df)) df[[col]] <- now
-  }
-  df
+db_columns <- function(df, table, keep = character()) {
+  df[, intersect(names(df), c(keep, schema_columns()[[table]])), drop = FALSE]
 }
 
 #' Turn artifact file names into the paths the database stores
@@ -55,17 +54,20 @@ with_fit_id <- function(df, fid, key = "fit_key") {
   df[, c("fit_id", setdiff(names(df), c("fit_id", key))), drop = FALSE]
 }
 
-#' The artifact files a dataset's tables reference
+#' The artifact files the database points at
 #'
-#' @return Data frame: `file` (name in the results `artifacts/` directory).
+#' The full loadings and scores of each fit (`POINTER_KINDS`) and the pattern
+#' driver results. The other artifacts stay in the results output; the derive
+#' step reads them from there.
+#'
+#' @return Character vector of file names in the results `artifacts/` directory.
 #' @noRd
-referenced_artifact_files <- function(tables, scope_tables) {
-  files <- character()
-  for (table in intersect(names(tables), scope_tables)) {
-    for (col in RESULT_TABLES[[table]]$paths) {
-      files <- c(files, stats::na.omit(tables[[table]][[col]]))
-    }
-  }
+pointer_artifact_files <- function(tables) {
+  fa <- tables[["fit_artifacts"]]
+  files <- c(
+    if (!is.null(fa)) fa$path[fa$kind %in% POINTER_KINDS],
+    stats::na.omit(tables[["pattern_drivers"]][["path"]])
+  )
   unique(files)
 }
 
@@ -76,27 +78,34 @@ referenced_artifact_files <- function(tables, scope_tables) {
 #' deletes everything hanging off the dataset's fits and its dataset-level
 #' rows, upserts the fits on `fit_key` (a fit keeps its `fit_id`; fits no
 #' longer in the results are dropped), then inserts every child table,
-#' resolving natural keys to ids. Artifact files are placed first.
+#' resolving natural keys to ids. The full loadings and scores and the pattern
+#' driver files are placed first. The tables built from the full artifacts are
+#' made afterwards by [derive_dataset()].
 #'
 #' @param results_root The results directory.
 #' @param db_path Path to the SQLite file (created if new).
 #' @param dataset_id Dataset id.
 #' @param artifact_mode How artifact files get from the results into the
-#'   database tree: `"link"` (hard link, copying across filesystems), `"copy"`
-#'   or `"move"`.
+#'   database tree: `"link"` (hard link, copying across filesystems), `"copy"`,
+#'   `"move"` or `"symlink"` (absolute symbolic link; the results must stay
+#'   where they are).
+#' @param artifact_base Path of the database whose directory holds
+#'   `stability_artifacts/`. It is `db_path` unless `db_path` is a part file of
+#'   a parallel build ([merge_parts()]), whose artifacts belong beside the final
+#'   database.
 #' @return A list: `dataset_id`, `fits` (counts by status), `written_at`.
 #' @export
-load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "link") {
+load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "link", artifact_base = db_path) {
   ddir <- results_dataset_dir(results_root, dataset_id)
   files <- list_table_files(file.path(ddir, "tables"))
   tables <- lapply(files, read_result_table)
   tab <- function(name) tables[[name]]
   now <- utc_now()
 
-  art_files <- referenced_artifact_files(tables, names(RESULT_TABLES))
+  art_files <- pointer_artifact_files(tables)
   place_artifacts(
     file.path(ddir, "artifacts", art_files),
-    file.path(artifacts_dir(db_path, dataset_id), art_files),
+    file.path(artifacts_dir(artifact_base, dataset_id), art_files),
     artifact_mode
   )
 
@@ -107,7 +116,10 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
 
   with_transaction(con, {
     # ---- dataset + methods ----
-    ds <- fill_loader_columns(tab("datasets"), "datasets", now)
+    ds <- db_columns(tab("datasets"), "datasets")
+    for (col in setdiff(contract_columns("datasets", include_optional = TRUE), names(ds))) {
+      if (col %in% schema_columns()$datasets) ds[[col]] <- NA
+    }
     cols <- names(ds)
     DBI::dbExecute(
       con,
@@ -121,14 +133,22 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
     )
     mt <- tab("methods")
     for (i in seq_len(nrow(mt))) {
+      d <- method_display(mt$method[i])
       q(
-        "INSERT INTO methods (method, family, sign_ambiguous, has_loadings) VALUES (?, ?, ?, ?)
+        "INSERT INTO methods (method, family, sign_ambiguous, has_loadings, label, color, display_order, blurb)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(method) DO UPDATE SET family = excluded.family,
-           sign_ambiguous = excluded.sign_ambiguous, has_loadings = excluded.has_loadings",
+           sign_ambiguous = excluded.sign_ambiguous, has_loadings = excluded.has_loadings,
+           label = excluded.label, color = excluded.color, display_order = excluded.display_order,
+           blurb = excluded.blurb",
         mt$method[i],
         mt$family[i],
         as.integer(mt$sign_ambiguous[i]),
-        as.integer(mt$has_loadings[i])
+        as.integer(mt$has_loadings[i]),
+        d$label,
+        d$color,
+        d$order,
+        d$blurb
       )
     }
 
@@ -141,16 +161,13 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
       "fit_artifacts",
       "gene_modules",
       "module_kme_summary",
-      "module_kme_histograms",
-      "fit_redundancy"
+      "module_kme_histograms"
     )) {
       q(sprintf("DELETE FROM %s WHERE fit_id IN %s", t, in_ds), id)
     }
     q(sprintf("DELETE FROM fit_pairs WHERE fit_a IN %s OR fit_b IN %s", in_ds, in_ds), id, id)
     for (t in c(
-      "dataset_artifacts",
       "matrix_diagnostics",
-      "similarity_histograms",
       "wgcna_sft",
       "gene_significance",
       "icasso_clusters",
@@ -160,7 +177,7 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
     }
 
     # ---- fits: upsert by fit_key, drop fits no longer in the results ----
-    fits <- fill_loader_columns(tab("fits"), "fits", now)
+    fits <- db_columns(tab("fits"), "fits")
     DBI::dbWriteTable(con, "new_fits", fits, temporary = TRUE, overwrite = TRUE)
     q("DELETE FROM fits WHERE dataset_id = ? AND fit_key NOT IN (SELECT fit_key FROM temp.new_fits)", id)
     fit_cols <- names(fits)
@@ -186,10 +203,13 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
     append_rows(con, "fit_params", with_fit_id(tab("fit_params"), fid))
     append_rows(con, "fit_metrics", with_fit_id(tab("fit_metrics"), fid))
     fa <- tab("fit_artifacts")
-    if (!is.null(fa)) append_rows(con, "fit_artifacts", with_fit_id(store_paths(fa, "fit_artifacts", id), fid))
+    if (!is.null(fa)) {
+      fa <- store_paths(fa[fa$kind %in% POINTER_KINDS, , drop = FALSE], "fit_artifacts", id)
+      append_rows(con, "fit_artifacts", with_fit_id(fa, fid))
+    }
 
     # ---- factors ----
-    append_rows(con, "factors", with_fit_id(tab("factors"), fid))
+    append_rows(con, "factors", with_fit_id(db_columns(tab("factors"), "factors", "fit_key"), fid))
     factor_ids <- id_lookup(
       DBI::dbGetQuery(
         con,
@@ -201,12 +221,6 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
       c("fit_key", "factor_index")
     )
     xid <- function(keys, idx) map_ids(paste(keys, idx), factor_ids, "factor")
-    xid_na <- function(keys, idx) {
-      out <- rep(NA_integer_, length(keys))
-      ok <- !is.na(keys)
-      out[ok] <- xid(keys[ok], idx[ok])
-      out
-    }
     # Rows for factors that are not in the factors table (e.g. a factor
     # dropped upstream) cannot be linked: drop them, with a warning.
     known_factors <- function(df, table) {
@@ -225,59 +239,30 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
 
     # ---- WGCNA per-fit kME ----
     for (t in c("gene_modules", "module_kme_summary", "module_kme_histograms")) {
-      append_rows(con, t, with_fit_id(tab(t), fid))
+      append_rows(con, t, with_fit_id(db_columns(tab(t), t, "fit_key"), fid))
     }
-    append_rows(con, "similarity_histograms", tab("similarity_histograms"))
-    append_rows(con, "fit_redundancy", with_fit_id(tab("fit_redundancy"), fid))
 
     # ---- representative-fit analyses ----
     pd <- tab("pattern_drivers")
     if (!is.null(pd) && nrow(pd)) {
-      pd <- store_paths(fill_loader_columns(pd, "pattern_drivers", now), "pattern_drivers", id)
+      pd <- store_paths(pd, "pattern_drivers", id)
       append_rows(
         con,
         "pattern_drivers",
         cbind(
           data.frame(factor_id = xid(pd$fit_key, pd$factor_index)),
-          pd[, setdiff(names(pd), c("fit_key", "factor_index"))]
+          db_columns(pd, "pattern_drivers")
         )
       )
     }
 
     # ---- ICASSO ----
     cl <- tab("icasso_clusters")
-    if (!is.null(cl) && nrow(cl)) {
-      cl <- store_paths(cl, "icasso_clusters", id)
-      append_rows(
-        con,
-        "icasso_clusters",
-        data.frame(
-          dataset_id = cl$dataset_id,
-          rank = cl$rank,
-          cluster_id = cl$cluster_id,
-          iq = cl$iq,
-          n_members = cl$n_members,
-          centrotype_factor_id = xid_na(cl$centrotype_fit_key, cl$centrotype_factor_index),
-          dendro_file = cl$dendro_file
-        )
-      )
-    }
-    mb <- tab("icasso_membership")
-    if (!is.null(mb) && nrow(mb)) {
-      append_rows(
-        con,
-        "icasso_membership",
-        cbind(
-          data.frame(factor_id = xid(mb$fit_key, mb$factor_index)),
-          mb[, setdiff(names(mb), c("fit_key", "factor_index"))]
-        )
-      )
-    }
+    if (!is.null(cl)) append_rows(con, "icasso_clusters", db_columns(cl, "icasso_clusters"))
 
     # ---- enrichment ----
     eq <- known_factors(tab("enrichment_queries"), "enrichment_queries")
     if (!is.null(eq) && nrow(eq)) {
-      eq <- fill_loader_columns(eq, "enrichment_queries", now)
       eq$query_id <- seq.int(next_id(con, "enrichment_queries", "query_id"), length.out = nrow(eq))
       append_rows(
         con,
@@ -286,9 +271,7 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
           query_id = eq$query_id,
           factor_id = xid(eq$fit_key, eq$factor_index),
           query_type = eq$query_type,
-          direction = eq$direction,
-          query_size = eq$query_size,
-          queried_at = eq$queried_at
+          direction = eq$direction
         )
       )
       er <- tab("enrichment_results")
@@ -305,36 +288,21 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
           "enrichment_results",
           cbind(
             data.frame(query_id = rq),
-            er[, setdiff(names(er), c("fit_key", "factor_index", "query_type", "direction"))]
+            db_columns(er, "enrichment_results")
           )
         )
       }
     }
 
-    # ---- score-level variance partition ----
-    append_rows(con, "factor_variance_models", tab("factor_variance_models"))
-    fv <- known_factors(tab("factor_variance"), "factor_variance")
-    if (!is.null(fv) && nrow(fv)) {
-      append_rows(
-        con,
-        "factor_variance",
-        cbind(
-          data.frame(factor_id = xid(fv$fit_key, fv$factor_index)),
-          fv[, setdiff(names(fv), c("fit_key", "factor_index"))]
-        )
-      )
-    }
-
     # ---- repeated measures and dataset-level tables ----
-    for (t in setdiff(VARIANCE_DATASET_TABLES, "factor_variance_models")) {
+    for (t in VARIANCE_DATASET_TABLES) {
       df <- tab(t)
-      if (!is.null(df)) append_rows(con, t, fill_loader_columns(df, t, now))
+      if (!is.null(df)) append_rows(con, t, db_columns(df, t))
     }
-    da <- tab("dataset_artifacts")
-    if (!is.null(da)) append_rows(con, "dataset_artifacts", store_paths(da, "dataset_artifacts", id))
     md <- tab("matrix_diagnostics")
-    if (!is.null(md)) append_rows(con, "matrix_diagnostics", fill_loader_columns(md, "matrix_diagnostics", now))
-    append_rows(con, "wgcna_sft", tab("wgcna_sft"))
+    if (!is.null(md)) append_rows(con, "matrix_diagnostics", db_columns(md, "matrix_diagnostics"))
+    ws <- tab("wgcna_sft")
+    if (!is.null(ws)) append_rows(con, "wgcna_sft", db_columns(ws, "wgcna_sft"))
     append_rows(con, "gene_significance", tab("gene_significance"))
   })
 
@@ -370,8 +338,6 @@ load_pairs <- function(con, tab, fid, xid) {
       fit_a = ifelse(swap, ib, ia),
       fit_b = ifelse(swap, ia, ib),
       same_rank = fp$same_rank,
-      n_factors_a = ifelse(swap, fp$n_factors_b, fp$n_factors_a),
-      n_factors_b = ifelse(swap, fp$n_factors_a, fp$n_factors_b),
       ari = fp$ari
     )
   )
@@ -416,7 +382,7 @@ load_pairs <- function(con, tab, fid, xid) {
       "fit_pair_null",
       cbind(
         data.frame(fit_pair_id = map_ids(paste(nl$fit_a_key, nl$fit_b_key), pair_id, "fit pair")),
-        nl[, c("metric", "n", "mean", "sd", "median", "p95", "max")]
+        nl[, c("metric", "p95")]
       )
     )
   }

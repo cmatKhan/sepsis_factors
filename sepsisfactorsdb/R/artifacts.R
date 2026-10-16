@@ -42,10 +42,11 @@ resolve_artifact <- function(path, db_path) {
 #' @param to Destination paths (same length as `from`).
 #' @param mode `"link"` hard-links and falls back to copying where a link is
 #'   impossible (another filesystem); `"copy"` copies; `"move"` renames
-#'   (falling back to copy and delete across filesystems).
+#'   (falling back to copy and delete across filesystems); `"symlink"` makes
+#'   an absolute symbolic link to the source, which must then stay in place.
 #' @return `to`, invisibly.
 #' @noRd
-place_artifacts <- function(from, to, mode = c("link", "copy", "move")) {
+place_artifacts <- function(from, to, mode = c("link", "copy", "move", "symlink")) {
   mode <- match.arg(mode)
   if (length(from) != length(to)) {
     cli::cli_abort("{.arg from} and {.arg to} must have the same length.")
@@ -61,12 +62,15 @@ place_artifacts <- function(from, to, mode = c("link", "copy", "move")) {
     return(invisible(to))
   }
   unlink(to)
-  done <- switch(
-    mode,
+  done <- switch(mode,
     link = suppressWarnings(file.link(from, to)),
+    symlink = suppressWarnings(file.symlink(normalizePath(from), to)),
     copy = file.copy(from, to, overwrite = TRUE),
     move = file.rename(from, to)
   )
+  if (mode == "symlink" && !all(done)) {
+    cli::cli_abort("Could not link {sum(!done)} artifact file{?s}, e.g. {.file {from[!done][1]}}.")
+  }
   if (!all(done)) {
     left <- !done
     ok <- file.copy(from[left], to[left], overwrite = TRUE)
@@ -81,9 +85,8 @@ place_artifacts <- function(from, to, mode = c("link", "copy", "move")) {
 #' Delete a dataset's unreferenced artifact files
 #'
 #' Files under the dataset's artifact directory in the database tree that no
-#' row references (`fit_artifacts`, `dataset_artifacts`, `pattern_drivers`,
-#' `projections`, `icasso_clusters`), e.g. fits dropped from a grid or keys
-#' from an earlier load. Only the database's tree is touched, never the
+#' row references (`fit_artifacts`, `pattern_drivers`, `projections`), e.g.
+#' fits dropped from a grid or keys from an earlier load. Only the database's tree is touched, never the
 #' results output.
 #'
 #' @param con DB connection.
@@ -97,14 +100,12 @@ remove_orphan_artifacts <- function(con, db_path, dataset_id) {
   in_ds <- "(SELECT fit_id FROM fits WHERE dataset_id = ?)"
   referenced <- c(
     q(sprintf("SELECT path FROM fit_artifacts WHERE fit_id IN %s", in_ds)),
-    q("SELECT path FROM dataset_artifacts WHERE dataset_id = ?"),
     q(sprintf(
       "SELECT d.path FROM pattern_drivers d JOIN factors x ON x.factor_id = d.factor_id
        WHERE x.fit_id IN %s",
       in_ds
     )),
-    q(sprintf("SELECT path FROM projections WHERE source_fit_id IN %s", in_ds)),
-    q("SELECT DISTINCT dendro_file FROM icasso_clusters WHERE dataset_id = ?")
+    q(sprintf("SELECT path FROM projections WHERE source_fit_id IN %s", in_ds))
   )
   prefix <- paste0("stability_artifacts/", dataset_id, "/")
   referenced <- sub(prefix, "", referenced[!is.na(referenced)], fixed = TRUE)

@@ -4,7 +4,12 @@
 \alias{load_cross_dataset}
 \title{Load the cross-dataset tables into the database}
 \usage{
-load_cross_dataset(results_root, db_path, artifact_mode = "link")
+load_cross_dataset(
+  results_root,
+  db_path,
+  artifact_mode = "link",
+  artifact_base = db_path
+)
 }
 \arguments{
 \item{results_root}{The results directory.}
@@ -12,8 +17,14 @@ load_cross_dataset(results_root, db_path, artifact_mode = "link")
 \item{db_path}{Path to the SQLite file (created if new).}
 
 \item{artifact_mode}{How artifact files get from the results into the
-database tree: \code{"link"} (hard link, copying across filesystems), \code{"copy"}
-or \code{"move"}.}
+database tree: \code{"link"} (hard link, copying across filesystems), \code{"copy"},
+\code{"move"} or \code{"symlink"} (absolute symbolic link; the results must stay
+where they are).}
+
+\item{artifact_base}{Path of the database whose directory holds
+\verb{stability_artifacts/}. It is \code{db_path} unless \code{db_path} is a part file of
+a parallel build (\code{\link[=merge_parts]{merge_parts()}}), whose artifacts belong beside the final
+database.}
 }
 \value{
 \code{NULL} (invisibly) if there were no cross-dataset tables, otherwise
@@ -23,9 +34,10 @@ a list: \code{n_projections}, \code{n_gene_space}, \code{orphans_removed} (per d
 \description{
 Run after every dataset is loaded, since projections and gene-space
 agreement link fits of two datasets. Replaces \code{projections},
-\code{gene_space_agreement} and \code{time_gene_recurrence} with the contents of
-\verb{cross_dataset/tables/}, places each projection result in its source
+\code{gene_space_agreement}, \code{time_gene_recurrence} and \code{composition_markers}
+with the contents of \verb{cross_dataset/tables/}, places each projection result in its source
 dataset's artifact directory, then removes artifact files in the database
-tree that no row references. Does nothing if the results have no
+tree that no row references. The projection values are stored by
+\code{\link[=derive_cross_dataset]{derive_cross_dataset()}}. Does nothing if the results have no
 \verb{cross_dataset/} tables.
 }

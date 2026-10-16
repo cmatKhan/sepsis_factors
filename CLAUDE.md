@@ -9,13 +9,13 @@ Three R packages for latent-factor analysis of sepsis transcriptomic time course
 another. The only coupling is two versioned contracts:
 
 ```
-sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 3)--> sepsisfactorsapp
+sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 4)--> sepsisfactorsapp
 ```
 
 | Package | Owns | Never does |
 |---|---|---|
 | `sepsisfactors` | All computation: datasets, preprocessing, fits, stability pairs, enrichment, variance partition, projections, drivers. Writes the results output. | Touch SQLite. |
-| `sepsisfactorsdb` | Validates the results output and loads it into the SQLite database and artifact layout. Specifies both contracts in its vignettes. | Compute statistics. |
+| `sepsisfactorsdb` | Validates the results output and loads it into the SQLite database and artifact layout. Specifies both contracts in its vignettes. | Compute statistics (TEMPORARY exception: the derive step, see below). |
 | `sepsisfactorsapp` | The Shiny app. Reads the database read-only, from a path the user supplies. | Copy data into the package or write to the database. |
 
 - A change to the results output or to the database layout touches **both sides**: bump
@@ -23,8 +23,14 @@ sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 3)--
   or `SCHEMA_VERSION` (the database), update `sepsisfactorsdb`'s vignettes, and say so in `NEWS.md`.
 - The method set is closed (pca, spca, ica, nmf, cogaps, wgcna). Adding a method is a developer task
   across `sepsisfactors` and `sepsisfactorsdb`. Adding a dataset is a user task (`use_dataset()`).
-- `sepsisfactorsapp` currently keeps copies of a few helpers from the other packages (listed in its
-  `TODO.md`). Do not "fix" the copies by adding a package dependency.
+- `sepsisfactorsapp` currently keeps copies of a few helpers from the other packages (listed in the root `TODO.md`,
+  section 1). Do not "fix" the copies by adding a package dependency.
+
+> **TEMPORARY exception (stage 1 of schema 4, 2026-10-16).** `sepsisfactorsdb` has a derive step
+> (`R/derive*.R`) that computes reduced and precomputed tables from the full artifacts, and a legacy
+> adapter (`R/legacy_adapter.R`) that reshapes the original project's output. Both go when `sepsisfactors`
+> writes the contract itself; the list of pieces, the packages to remove and the contract catch-up are in
+> section 7 of `TODO.md`. Do not add more statistics to `sepsisfactorsdb`.
 
 ## Working style
 
