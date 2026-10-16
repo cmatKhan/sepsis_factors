@@ -9,6 +9,36 @@ The app only **reads**. It opens the SQLite database written by
 enough; nothing is copied into this package, and the app reads no configuration
 files: you say where the database is.
 
+## Install
+
+The app is a standalone R package. It does not need `sepsisfactors` or `sepsisfactorsdb`
+installed: it only reads the database file they produce.
+
+From GitHub, with [pak](https://pak.r-lib.org/):
+
+```r
+install.packages("pak")   # once, if you do not have it
+pak::pak("cmatKhan/sepsis_factors/sepsisfactorsapp")
+```
+
+From a local checkout of the repository:
+
+```r
+install.packages("devtools")   # once
+devtools::install("sepsisfactorsapp")
+# or from a shell, in the directory that contains sepsisfactorsapp/:
+#   R CMD INSTALL sepsisfactorsapp
+```
+
+The packages it uses (bslib, cli, DBI, DT, ggplot2, ggrepel, jsonlite, RSQLite, scales, shiny,
+withr) come from CRAN and are installed with it. Check the install by loading it:
+
+```r
+library(sepsisfactorsapp)
+```
+
+`download_db()` below needs an internet connection and nothing beyond base R.
+
 ## Get the data and run
 
 ```r
