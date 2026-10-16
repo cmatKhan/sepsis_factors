@@ -19,7 +19,12 @@ CHUNK_TABLES <- c(
 #'
 #' @param name File name without extension.
 #' @noRd
-part_file <- function(dir, name) file.path(dir, paste0(gsub("[^A-Za-z0-9_.-]", "_", name), ".sqlite"))
+part_file <- function(dir, name) {
+  file.path(
+    dir,
+    paste0(gsub("[^A-Za-z0-9_.-]", "_", name), ".sqlite")
+  )
+}
 
 #' Close a part so that it is one self-contained file
 #'
@@ -64,10 +69,17 @@ publish_file <- function(from, to) {
 #' @noRd
 plan_chunks <- function(results_root, dataset_id, chunk_fits) {
   tdir <- file.path(results_dataset_dir(results_root, dataset_id), "tables")
-  fits <- read_result_table(file.path(tdir, "fits.parquet"), c("fit_key", "method", "rank", "representative", "status"))
+  fits <- read_result_table(
+    file.path(tdir, "fits.parquet"),
+    c("fit_key", "method", "rank", "representative", "status")
+  )
   fits$fit_id <- seq_len(nrow(fits)) # load_dataset() numbers a new part's fits in file order
   drivers_file <- file.path(tdir, "pattern_drivers.parquet")
-  n_drivers <- if (file.exists(drivers_file)) nrow(read_result_table(drivers_file, "fit_key")) else 0L
+  n_drivers <- if (file.exists(drivers_file)) {
+    nrow(read_result_table(drivers_file, "fit_key"))
+  } else {
+    0L
+  }
   k <- ceiling((nrow(fits) + n_drivers) / chunk_fits)
   if (is.na(k) || k <= 1L) {
     return(NULL)
@@ -98,13 +110,27 @@ plan_chunks <- function(results_root, dataset_id, chunk_fits) {
 #' @return The path of the part.
 #' @keywords internal
 #' @export
-build_load_part <- function(results_root, dataset_id, part_dir, work_dir, artifact_base, artifact_mode, chunked) {
+build_load_part <- function(
+  results_root,
+  dataset_id,
+  part_dir,
+  work_dir,
+  artifact_base,
+  artifact_mode,
+  chunked
+) {
   work_dir <- work_dir %||% tempdir()
   dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
   work <- part_file(work_dir, paste0(dataset_id, "-load-", Sys.getpid()))
   unlink(c(work, paste0(work, c("-wal", "-shm"))))
   load_dataset(results_root, work, dataset_id, artifact_mode, artifact_base)
-  derive_dataset(results_root, work, dataset_id, level = if (chunked) "dataset" else "all", artifact_base = artifact_base)
+  derive_dataset(
+    results_root,
+    work,
+    dataset_id,
+    level = if (chunked) "dataset" else "all",
+    artifact_base = artifact_base
+  )
   con <- open_stability_db(work)
   seal_part(con)
   DBI::dbDisconnect(con)
@@ -125,16 +151,35 @@ build_load_part <- function(results_root, dataset_id, part_dir, work_dir, artifa
 #' @return The path of the part.
 #' @keywords internal
 #' @export
-build_chunk_part <- function(results_root, dataset_id, load_part, fit_keys, chunk, part_dir, work_dir, artifact_base) {
+build_chunk_part <- function(
+  results_root,
+  dataset_id,
+  load_part,
+  fit_keys,
+  chunk,
+  part_dir,
+  work_dir,
+  artifact_base
+) {
   work_dir <- work_dir %||% tempdir()
   dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
   work <- part_file(work_dir, sprintf("%s-chunk%03d-%d", dataset_id, chunk, Sys.getpid()))
   unlink(c(work, paste0(work, c("-wal", "-shm"))))
   file.copy(load_part, work)
-  derive_dataset(results_root, work, dataset_id, level = "fits", fit_keys = fit_keys, artifact_base = artifact_base)
+  derive_dataset(
+    results_root,
+    work,
+    dataset_id,
+    level = "fits",
+    fit_keys = fit_keys,
+    artifact_base = artifact_base
+  )
   con <- open_stability_db(work)
   DBI::dbExecute(con, "PRAGMA foreign_keys = OFF")
-  tabs <- DBI::dbGetQuery(con, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")$name
+  tabs <- DBI::dbGetQuery(
+    con,
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+  )$name
   for (t in setdiff(tabs, CHUNK_TABLES)) DBI::dbExecute(con, sprintf("DELETE FROM %s", t))
   seal_part(con)
   DBI::dbExecute(con, "VACUUM")
@@ -156,7 +201,12 @@ build_projection_part <- function(projections, source_id, part_dir, work_dir, ar
   dir.create(work_dir, recursive = TRUE, showWarnings = FALSE)
   work <- part_file(work_dir, paste0("projections-", source_id, "-", Sys.getpid()))
   unlink(c(work, paste0(work, c("-wal", "-shm"))))
-  derive_cross_dataset(artifact_base, projections = projections, out_path = work, artifact_base = artifact_base)
+  derive_cross_dataset(
+    artifact_base,
+    projections = projections,
+    out_path = work,
+    artifact_base = artifact_base
+  )
   con <- open_stability_db(work)
   seal_part(con)
   DBI::dbDisconnect(con)

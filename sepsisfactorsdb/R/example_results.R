@@ -15,11 +15,19 @@ example_results <- function(path = tempfile("results-"), n_datasets = 2L) {
   if (dir.exists(path) && length(list.files(path))) {
     cli::cli_abort("{.file {path}} is not empty.")
   }
-  state <- new.env(parent = emptyenv())
-  state$n <- 0L
-  toy1 <- example_dataset("TOY1", c("pca", "spca", "ica", "nmf", "cogaps", "wgcna"), state, path, full = TRUE)
-  toy2 <- example_dataset("TOY2", "pca", state, path, full = FALSE)
-  toy3 <- if (n_datasets >= 3L) example_dataset("TOY3", c("pca", "nmf"), state, path, full = FALSE)
+  # fit keys count up across the datasets, so each dataset starts after the fits of the last
+  toy1 <- example_dataset(
+    "TOY1",
+    c("pca", "spca", "ica", "nmf", "cogaps", "wgcna"),
+    first_n = 0L,
+    path,
+    full = TRUE
+  )
+  toy2 <- example_dataset("TOY2", "pca", first_n = toy1$n_fits, path, full = FALSE)
+  toy3 <- if (n_datasets >= 3L) {
+    first_n <- toy1$n_fits + toy2$n_fits
+    example_dataset("TOY3", c("pca", "nmf"), first_n = first_n, path, full = FALSE)
+  }
 
   cross_dir <- file.path(path, "cross_dataset")
   write_result_table(
@@ -134,15 +142,153 @@ write_result_table <- function(df, table, dir) {
   invisible(df)
 }
 
-example_fit_key <- function(method, state) {
-  state$n <- state$n + 1L
-  sprintf("%s_%016x", method, 4096L + 977L * state$n)
+example_fit_key <- function(method, n) {
+  sprintf("%s_%016x", method, 4096L + 977L * n)
+}
+
+#' The fits of an example dataset, in the order they are made
+#'
+#' @param methods Method names.
+#' @return A list with one list per fit (`method`, `rank`, `seed`, ...).
+#' @noRd
+example_fit_specs <- function(methods) {
+  fit <- function(
+    method,
+    rank,
+    seed = NA,
+    bootstrap = 0L,
+    status = "ok",
+    representative = 0L,
+    n_factors = rank,
+    error = NA_character_,
+    kinds = SUPPORTED_METHOD_OUTPUTS[[method]]$fit_artifacts
+  ) {
+    list(
+      method = method,
+      rank = rank,
+      seed = seed,
+      bootstrap = bootstrap,
+      status = status,
+      representative = representative,
+      n_factors = n_factors,
+      error = error,
+      kinds = kinds
+    )
+  }
+  per_method <- lapply(methods, function(m) {
+    switch(m,
+      pca = list(fit("pca", 3, representative = 1L)),
+      spca = list(
+        fit("spca", 2, representative = 1L),
+        fit("spca", 2),
+        fit("spca", 2, status = "failed", error = "killed_not_converged (8h)")
+      ),
+      ica = list(
+        fit("ica", 2, seed = 1L, representative = 1L),
+        fit("ica", 2, seed = 2L),
+        fit("ica", 2, seed = 3L, bootstrap = 1L)
+      ),
+      nmf = list(
+        fit("nmf", 2, seed = 1L, representative = 1L),
+        fit("nmf", 2, seed = 2L)
+      ),
+      cogaps = list(
+        fit("cogaps", 2, seed = 1L, representative = 1L),
+        fit("cogaps", 2, seed = 2L)
+      ),
+      wgcna = list(
+        fit(
+          "wgcna",
+          NA,
+          representative = 1L,
+          n_factors = 2,
+          kinds = c("scores", "diag", "dendrogram")
+        ),
+        fit("wgcna", NA, n_factors = 2)
+      )
+    )
+  })
+  unlist(per_method, recursive = FALSE)
+}
+
+#' One synthetic fit: its `fits` row, `factors` rows and artifact rows
+#'
+#' Writes the fit's artifacts with `art()`.
+#'
+#' @noRd
+example_fit <- function(spec, key, id, genes, samples, full, art) {
+  method <- spec$method
+  n_factors <- spec$n_factors
+  status <- spec$status
+  fit <- data.frame(
+    fit_key = key,
+    dataset_id = id,
+    method = method,
+    rank = as.integer(spec$rank),
+    seed = as.integer(spec$seed),
+    bootstrap = as.integer(spec$bootstrap),
+    representative = as.integer(spec$representative),
+    mse = if (method == "spca" || method == "wgcna") NA_real_ else 0.5,
+    n_factors = if (status == "ok") as.integer(n_factors) else NA_integer_,
+    status = status,
+    error = spec$error
+  )
+  if (status != "ok") {
+    return(list(fit = fit, factors = NULL, artifacts = NULL))
+  }
+  idx <- seq_len(n_factors)
+  labels_f <- paste0(if (method == "wgcna") "ME" else "F", idx)
+  factors <- data.frame(
+    fit_key = key,
+    factor_index = idx,
+    label = labels_f,
+    n_genes = if (method == "wgcna") 5L else 10L,
+    stability_cosine = if (full && method == "ica") 0.9 else NA_real_,
+    stability_pearson = if (full && method == "ica") 0.88 else NA_real_,
+    stability_spearman = if (full && method == "ica") 0.85 else NA_real_,
+    kurtosis = if (method == "ica") 3.1 else NA_real_,
+    excess_kurtosis = if (method == "ica") 0.1 else NA_real_
+  )
+  colnames_f <- paste0("F", idx)
+  # a bootstrap fit has no scores artifact, but its random numbers are still drawn, so the later
+  # artifacts keep the values they always had
+  artifacts <- lapply(spec$kinds, function(kind) {
+    obj <- switch(kind,
+      loadings = matrix(
+        stats::rnorm(10 * n_factors),
+        10,
+        n_factors,
+        dimnames = list(genes, colnames_f)
+      ),
+      scores = matrix(
+        stats::rnorm(6 * n_factors),
+        6,
+        n_factors,
+        dimnames = list(samples, labels_f)
+      ),
+      dendrogram = {
+        h <- stats::hclust(stats::dist(matrix(stats::rnorm(20), 10)))
+        list(merge = h$merge, height = h$height, order = h$order, labels = genes)
+      },
+      diag = list(
+        sdev = c(2, 1, 0.5),
+        center = stats::setNames(rep(0, 10), genes),
+        mse_by_rank = c(1, 0.6, 0.3)
+      ),
+      list()
+    )
+    if (kind == "scores" && spec$bootstrap == 1L) {
+      return(NULL)
+    }
+    data.frame(fit_key = key, kind = kind, path = art(paste0(key, "_", kind, ".rds"), obj))
+  })
+  list(fit = fit, factors = factors, artifacts = do.call(rbind, artifacts))
 }
 
 #' One synthetic dataset of the example results
 #'
 #' @noRd
-example_dataset <- function(id, methods, state, root, full) {
+example_dataset <- function(id, methods, first_n, root, full) {
   set.seed(match(id, c("TOY1", "TOY2", "TOY3")))
   dir <- file.path(root, "datasets", id)
   dir.create(file.path(dir, "artifacts"), recursive = TRUE, showWarnings = FALSE)
@@ -154,104 +300,18 @@ example_dataset <- function(id, methods, state, root, full) {
   }
   tbl <- function(df, table) write_result_table(df, table, dir)
 
-  fits <- list()
-  factors <- list()
-  fit_artifacts <- list()
-  keys <- list()
-  add_fit <- function(
-    method,
-    rank,
-    seed = NA,
-    bootstrap = 0L,
-    status = "ok",
-    representative = 0L,
-    n_factors = rank,
-    error = NA_character_,
-    kinds = SUPPORTED_METHOD_OUTPUTS[[method]]$fit_artifacts,
-    has_loadings = SUPPORTED_METHOD_OUTPUTS[[method]]$has_loadings
-  ) {
-    key <- example_fit_key(method, state)
-    fits[[length(fits) + 1L]] <<- data.frame(
-      fit_key = key,
-      dataset_id = id,
-      method = method,
-      rank = as.integer(rank),
-      seed = as.integer(seed),
-      bootstrap = as.integer(bootstrap),
-      representative = as.integer(representative),
-      mse = if (method == "spca" || method == "wgcna") NA_real_ else 0.5,
-      n_factors = if (status == "ok") as.integer(n_factors) else NA_integer_,
-      status = status,
-      error = error
-    )
-    if (status == "ok") {
-      idx <- seq_len(n_factors)
-      factors[[length(factors) + 1L]] <<- data.frame(
-        fit_key = key,
-        factor_index = idx,
-        label = paste0(if (method == "wgcna") "ME" else "F", idx),
-        n_genes = if (method == "wgcna") 5L else 10L,
-        stability_cosine = if (full && method == "ica") 0.9 else NA_real_,
-        stability_pearson = if (full && method == "ica") 0.88 else NA_real_,
-        stability_spearman = if (full && method == "ica") 0.85 else NA_real_,
-        kurtosis = if (method == "ica") 3.1 else NA_real_,
-        excess_kurtosis = if (method == "ica") 0.1 else NA_real_
-      )
-      colnames_f <- paste0("F", idx)
-      for (kind in kinds) {
-        labels_f <- paste0(if (method == "wgcna") "ME" else "F", idx)
-        obj <- switch(kind,
-          loadings = matrix(stats::rnorm(10 * n_factors), 10, n_factors, dimnames = list(genes, colnames_f)),
-          scores = matrix(stats::rnorm(6 * n_factors), 6, n_factors, dimnames = list(samples, labels_f)),
-          dendrogram = {
-            h <- stats::hclust(stats::dist(matrix(stats::rnorm(20), 10)))
-            list(merge = h$merge, height = h$height, order = h$order, labels = genes)
-          },
-          diag = list(sdev = c(2, 1, 0.5), center = stats::setNames(rep(0, 10), genes), mse_by_rank = c(1, 0.6, 0.3)),
-          list()
-        )
-        if (kind == "scores" && bootstrap == 1L) next
-        fit_artifacts[[length(fit_artifacts) + 1L]] <<- data.frame(
-          fit_key = key,
-          kind = kind,
-          path = art(paste0(key, "_", kind, ".rds"), obj)
-        )
-      }
-    }
-    keys[[method]] <<- c(keys[[method]], key)
-    key
-  }
-
-  for (m in methods) {
-    switch(m,
-      pca = add_fit("pca", 3, representative = 1L),
-      spca = {
-        add_fit("spca", 2, representative = 1L)
-        add_fit("spca", 2)
-        add_fit("spca", 2, status = "failed", error = "killed_not_converged (8h)")
-      },
-      ica = {
-        add_fit("ica", 2, seed = 1L, representative = 1L)
-        add_fit("ica", 2, seed = 2L)
-        add_fit("ica", 2, seed = 3L, bootstrap = 1L)
-      },
-      nmf = {
-        add_fit("nmf", 2, seed = 1L, representative = 1L)
-        add_fit("nmf", 2, seed = 2L)
-      },
-      cogaps = {
-        add_fit("cogaps", 2, seed = 1L, representative = 1L)
-        add_fit("cogaps", 2, seed = 2L)
-      },
-      wgcna = {
-        add_fit("wgcna", NA, representative = 1L, n_factors = 2, kinds = c("scores", "diag", "dendrogram"))
-        add_fit("wgcna", NA, n_factors = 2)
-      }
-    )
-  }
-  fits <- do.call(rbind, fits)
+  specs <- example_fit_specs(methods)
+  spec_methods <- vapply(specs, function(spec) spec$method, "")
+  fit_keys <- example_fit_key(spec_methods, first_n + seq_along(specs))
+  built <- Map(
+    function(spec, key) example_fit(spec, key, id, genes, samples, full, art),
+    specs,
+    fit_keys
+  )
+  keys <- split(fit_keys, factor(spec_methods, levels = unique(spec_methods)))
+  fits <- do.call(rbind, lapply(built, `[[`, "fit"))
   tbl(fits, "fits")
-  tbl(do.call(rbind, factors), "factors")
+  tbl(do.call(rbind, lapply(built, `[[`, "factors")), "factors")
 
   method_rows <- do.call(
     rbind,
@@ -280,7 +340,10 @@ example_dataset <- function(id, methods, state, root, full) {
           group = rep(c("a", "b"), each = 3)
         )
       ),
-      art("feature_metadata.rds", data.frame(feature_id = genes, ensembl = genes, symbol = paste0("SYM", 1:10)))
+      art(
+        "feature_metadata.rds",
+        data.frame(feature_id = genes, ensembl = genes, symbol = paste0("SYM", 1:10))
+      )
     )
   )
   tbl(data.frame(dataset_id = id, dataset_files), "dataset_artifacts")
@@ -303,7 +366,7 @@ example_dataset <- function(id, methods, state, root, full) {
     ),
     "datasets"
   )
-  tbl(do.call(rbind, fit_artifacts), "fit_artifacts")
+  tbl(do.call(rbind, lapply(built, `[[`, "artifacts")), "fit_artifacts")
   tbl(
     data.frame(
       fit_key = fits$fit_key[fits$status == "ok"],
@@ -325,7 +388,7 @@ example_dataset <- function(id, methods, state, root, full) {
   if (full) {
     example_full_tables(id, keys, fits, genes, samples, tbl, art)
   }
-  invisible(list(keys = lapply(keys, `[`, 1L)))
+  invisible(list(keys = lapply(keys, `[`, 1L), n_fits = length(fit_keys)))
 }
 
 #' The analysis tables of the example's full dataset
@@ -407,8 +470,26 @@ example_full_tables <- function(id, keys, fits, genes, samples, tbl, art) {
   gm$margin <- NA_real_
   gm$p_analytic <- 0.01
   gm$p_perm <- 0.02
-  tbl(gm[, c("fit_key", "gene", "module", "kme_own", "next_module", "kme_next", "margin", "p_analytic", "p_perm")], "gene_modules")
-  ks <- expand.grid(fit_key = wgcna, module = 1:2, grp = c("member", "nonmember", "permutation"), stringsAsFactors = FALSE)
+  tbl(
+    gm[, c(
+      "fit_key",
+      "gene",
+      "module",
+      "kme_own",
+      "next_module",
+      "kme_next",
+      "margin",
+      "p_analytic",
+      "p_perm"
+    )],
+    "gene_modules"
+  )
+  ks <- expand.grid(
+    fit_key = wgcna,
+    module = 1:2,
+    grp = c("member", "nonmember", "permutation"),
+    stringsAsFactors = FALSE
+  )
   tbl(
     data.frame(ks, n = 5L, mean = 0.5, sd = 0.1, median = 0.5, p95 = 0.7, p99 = 0.8),
     "module_kme_summary"
@@ -540,7 +621,10 @@ example_full_tables <- function(id, keys, fits, genes, samples, tbl, art) {
     ),
     "enrichment_results"
   )
-  tbl(data.frame(dataset_id = id, method = "pca", formula = "~ (1|subject)", n_factors = 3L), "factor_variance_models")
+  tbl(
+    data.frame(dataset_id = id, method = "pca", formula = "~ (1|subject)", n_factors = 3L),
+    "factor_variance_models"
+  )
   tbl(
     data.frame(
       fit_key = keys$pca[1],
@@ -577,9 +661,12 @@ example_full_tables <- function(id, keys, fits, genes, samples, tbl, art) {
       dataset_id = id, sample_id = samples, subject = rep(c("a", "b", "c"), 2),
       timepoint = rep(c("t0", "t1"), each = 3), grp = NA_character_, cell = NA_character_,
       expr_mean = 5, expr_sd = 1, expr_q10 = 4, expr_median = 5, expr_q90 = 6,
-      pc1 = 0.1, pc2 = 0.2, pc3 = 0.3, neutrophil_score = 0.1, lymphocyte_score = 0.2, nl_score = -0.1,
-      control_mean = NA_real_, control_factor = NA_real_, log2_lib_size = NA_real_, norm_factor = NA_real_,
-      chrY_score = NA_real_, xist = NA_real_, inferred_sex = NA_character_, recorded_sex = NA_character_
+      pc1 = 0.1, pc2 = 0.2, pc3 = 0.3, neutrophil_score = 0.1, lymphocyte_score = 0.2,
+      nl_score = -0.1,
+      control_mean = NA_real_, control_factor = NA_real_, log2_lib_size = NA_real_,
+      norm_factor = NA_real_,
+      chrY_score = NA_real_, xist = NA_real_, inferred_sex = NA_character_,
+      recorded_sex = NA_character_
     ),
     "samples"
   )
@@ -626,6 +713,9 @@ example_full_tables <- function(id, keys, fits, genes, samples, tbl, art) {
     ),
     "de_contrasts"
   )
-  tbl(data.frame(dataset_id = id, symbol = c("G1", "G2"), time_all = 0.2, between_subject = 0.5), "variance_time_genes")
+  tbl(
+    data.frame(dataset_id = id, symbol = c("G1", "G2"), time_all = 0.2, between_subject = 0.5),
+    "variance_time_genes"
+  )
   invisible(NULL)
 }

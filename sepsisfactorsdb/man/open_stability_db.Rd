@@ -14,7 +14,7 @@ A DBI connection; close it with \code{\link[DBI:dbDisconnect]{DBI::dbDisconnect(
 }
 \description{
 Creates the file from \code{schema.sql} and \code{views.sql} if it is new, stamps
-\verb{PRAGMA user_version} and fills the \code{meta} table; otherwise refuses a database whose version is not
-\link{SCHEMA_VERSION}. Sets \code{foreign_keys = ON}, WAL journaling,
+\verb{PRAGMA user_version} and fills the \code{meta} table; otherwise refuses a database whose version
+is not \link{SCHEMA_VERSION}. Sets \code{foreign_keys = ON}, WAL journaling,
 \code{synchronous = NORMAL} and a 30 s busy timeout.
 }

@@ -14,6 +14,10 @@ sepsisfactors --[results output]--> sepsisfactorsdb --[SQLite DB + artifacts]-->
 
 ## Use
 
+`vignette("building")` has the full how-to, including the SLURM setup. In short:
+
+**Sequential** (a few datasets, or a quick check):
+
 ```r
 library(sepsisfactorsdb)
 
@@ -21,22 +25,40 @@ library(sepsisfactorsdb)
 ingest_results("path/to/results", "path/to/stability.sqlite")
 ```
 
-For a parallel build (one part file per dataset, merged), locally or on SLURM:
+**Parallel on one machine** (one part file per dataset, built by worker processes, then merged):
 
 ```r
 ingest_parallel("path/to/results", "path/to/stability.sqlite",
                 controller = ingest_controller("local"))
 ```
 
-For an incremental, restartable load, set up a targets workflow (`ingest.yml` chooses local or SLURM
-workers; `use_ingest(serial = TRUE)` sets up the serial one instead):
+**Parallel on a SLURM cluster** (the workers are SLURM jobs, through `crew.cluster`):
 
 ```r
-use_ingest("ingest")   # writes ingest/_targets.R; edit the paths, then targets::tar_make()
+sepsisfactorsdb::use_ingest("run")   # writes run/_targets.R, run/ingest.yml, run/run_ingest.sbatch
 ```
+
+```sh
+# 1. install sepsisfactorsdb where workers can see it (R CMD INSTALL sepsisfactorsdb)
+# 2. edit run/ingest.yml: results_root, db_path, part_dir (shared), controller.type: slurm,
+#    controller.slurm.setup_lines (how R gets on the path), partition, memory and time per profile
+# 3. try three small datasets first (datasets: [...] in ingest.yml), then all
+cd run && mkdir -p logs && sbatch run_ingest.sbatch
+```
+
+All three give the same database, ids included. A failed build never replaces an existing database.
+A rerun rebuilds only the parts of datasets whose results changed. The SLURM path has not yet been
+run on a real cluster; its resource defaults are starting points.
+
+For an incremental, restartable sequential load, `use_ingest("run", serial = TRUE)` sets up the serial
+targets workflow.
+
+The original project's output (a schema-3 database with `stability_artifacts/`) is converted first with
+`legacy_to_results()` (temporary; see `vignette("building")`).
 
 ## Documentation
 
+- `vignette("building")`: how to build the database, sequentially, in parallel and on SLURM.
 - `vignette("results-output")`: the results-output specification (what `sepsisfactors` writes).
 - `vignette("database")`: the schema and artifact reference (what readers can rely on).
 - `example_results()` writes a tiny valid results output.

@@ -64,3 +64,24 @@ test_that("place_artifacts creates every destination directory", {
   expect_equal(readLines(file.path(dest, "one", "a")), "x")
   expect_equal(readLines(file.path(dest, "two", "b")), "y")
 })
+
+test_that("orphan cleanup removes unreferenced files in the database tree only", {
+  toy <- local_toy_db()
+  fits <- toy_fits("pca")[, c("fit_id", "fit_key", "dataset_id", "method", "status")]
+  DBI::dbAppendTable(toy$con, "fits", fits)
+  DBI::dbAppendTable(
+    toy$con,
+    "fit_artifacts",
+    data.frame(fit_id = 1L, kind = "loadings", path = artifact_rel("D", "a_loadings.rds"))
+  )
+  dir <- artifacts_dir(toy$db, "D")
+  dir.create(dir, recursive = TRUE)
+  saveRDS(1, file.path(dir, "a_loadings.rds"))
+  saveRDS(1, file.path(dir, "stray.rds"))
+  other <- artifacts_dir(toy$db, "OTHER")
+  dir.create(other)
+  saveRDS(1, file.path(other, "stray.rds"))
+  expect_equal(remove_orphan_artifacts(toy$con, toy$db, "D"), 1)
+  expect_equal(list.files(dir), "a_loadings.rds")
+  expect_true(file.exists(file.path(other, "stray.rds")))
+})

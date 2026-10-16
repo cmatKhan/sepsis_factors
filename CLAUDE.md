@@ -40,6 +40,25 @@ sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 4)--
   discussion rather than shipping it.
 - **No backward compatibility.** Delete legacy code rather than keep it runnable; correctness is shown
   by parity checks, not by preserving old paths.
+- **Avoid environments as mutable state, and ask first.** Do not use `new.env()`, `local()` closures that
+  keep state, `<<-`, or `assign()`/`get()`/`exists()` on an environment (as a cache, counter, accumulator or
+  lookup table) without the user's input. When you think one is useful, stop and ask about the design: say
+  what it would hold, why, and the plain alternative (functions that take their inputs and return their
+  results; computing a value once up front into a list; combining results with `lapply()`, `vapply()` or
+  `Reduce()`). In an automated run, state the proposed use and the alternative in the issue or PR and stop
+  for discussion, as for any workaround. `lintr`'s `assignment_linter` flags `<<-` and suggests assigning
+  into an environment instead; that suggestion falls under this rule, so do not apply it without asking.
+  What the references say:
+  - Advanced R, [section 10.2.4 "Stateful functions"](https://adv-r.hadley.nz/function-factories.html),
+    documents the pattern: "The super assignment operator, `<<-` rebinds an existing name found in a
+    parent environment." It also says: "Stateful functions are best used in moderation." For anything that
+    manages more than one variable, it says to switch to R6. So it is an accepted idiom, but one the book
+    tells you to use sparingly.
+  - R Packages, [chapter 6 "R code"](https://r-pkgs.org/code.html), warns against computing and caching
+    objects at build time: compute them in a function at run time instead. It does not discuss `<<-` or
+    package-level environments.
+  - No authoritative reference recommending a package-level environment
+    (`the <- new.env(parent = emptyenv())`, then `the$cache <- ...`) has been verified, so do not assume one.
 - **Explain unfamiliar methods descriptively** (what the method does, what the choice changes), and give
   a recommendation rather than a survey of options.
 - **Report outcomes faithfully**, including failing tests (with their output), skipped steps, and
@@ -57,6 +76,10 @@ sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 4)--
   (internals get plain comments or `@noRd`); `devtools::document()` after any roxygen change.
 - testthat 3e; `tests/testthat/test-<name>.R` mirrors `R/<name>.R`; `expect_snapshot()` for errors and
   warnings; `withr` for cleanup.
+- Tests are unit tests of logic: small functions on small, direct inputs. Do not add end-to-end tests that
+  run a whole pipeline, start workers or load a full fixture database; the maintainer checks integration by
+  using the packages. At most one cheap smoke test per major entry point. Keep the whole suite fast (a
+  package's `devtools::test()` should take well under a minute single-process).
 - Messages through `cli` (`cli_abort()`, `cli_warn()`, `cli_inform()`).
 - No `library()`, `source()`, `setwd()` or working-directory-relative paths in package code; files that
   ship with a package are found with `system.file()`.

@@ -1,5 +1,6 @@
 # sepsisfactorsdb 0.0.0.9000
 
+* New vignette `vignette("building")`: how to build the database sequentially (`ingest_results()`), in parallel on one machine (`ingest_parallel()`) and on a SLURM cluster (`use_ingest()`, `ingest.yml`, `run_ingest.sbatch`), with artifact modes, restarting, sizing and checking. `run_ingest.sbatch` now says to create `logs/` before `sbatch`.
 * `ingest_parallel()` builds the database from per-dataset part files made in parallel (`ingest_controller("local")` or `"slurm"`, with crew and crew.cluster) and merges them with `merge_parts()`; the result equals `ingest_results()`, ids included. Large datasets are split into chunks (`chunk_fits`). The ids are renumbered at the merge (see `vignette("database")`). `ingest_parallel_targets()` is the targets pipeline; `use_ingest()` now writes `_targets.R`, `ingest.yml` and `run_ingest.sbatch` for it (`use_ingest(serial = TRUE)` keeps the serial workflow). A failed build leaves the old database untouched and a deleted database needs no `tar_invalidate()`.
 * `ingest_results()` loads datasets sorted by id, so its ids match the parallel build.
 * `derive_dataset()` gains `level`, `fit_keys` and `artifact_base`; `load_dataset()` and `load_cross_dataset()` gain `artifact_base`; `derive_cross_dataset()` takes `db_path` and optional `projections`/`out_path`; `example_results()` gains `n_datasets`.

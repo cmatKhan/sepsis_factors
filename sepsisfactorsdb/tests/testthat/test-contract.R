@@ -12,7 +12,10 @@ test_that("columns the database does not store and optional columns are not requ
   expect_false("written_at" %in% contract_columns("fits"))
   expect_true("written_at" %in% contract_columns("fits", include_optional = TRUE))
   expect_false("family" %in% contract_columns("datasets"))
-  expect_contains(contract_columns("datasets", include_optional = TRUE), c("family", "family_position", "hf_collection"))
+  expect_contains(
+    contract_columns("datasets", include_optional = TRUE),
+    c("family", "family_position", "hf_collection")
+  )
   expect_false("label" %in% contract_columns("methods", include_optional = TRUE))
 })
 
@@ -38,7 +41,11 @@ test_that("every method has display metadata for the methods table", {
     d <- method_display(m)
     expect_true(all(nzchar(c(d$label, d$color, d$blurb))))
   }
-  expect_equal(sort(vapply(names(SUPPORTED_METHOD_OUTPUTS), function(m) method_display(m)$order, 1L)), c(1:6), ignore_attr = TRUE)
+  expect_equal(
+    sort(vapply(names(SUPPORTED_METHOD_OUTPUTS), function(m) method_display(m)$order, 1L)),
+    c(1:6),
+    ignore_attr = TRUE
+  )
 })
 
 test_that("an unknown table is an error", {

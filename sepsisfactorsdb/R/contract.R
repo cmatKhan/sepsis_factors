@@ -208,7 +208,10 @@ SUPPORTED_METHOD_OUTPUTS <- list(
       label = "PCA",
       color = "#4C78A8",
       order = 1L,
-      blurb = "One deterministic fit at the largest rank; rank n is its first n components, so there is no seed stability."
+      blurb = paste0(
+        "One deterministic fit at the largest rank; rank n is its first n components, ",
+        "so there is no seed stability."
+      )
     ),
     family = "seed_sweep",
     sign_ambiguous = TRUE,
@@ -222,7 +225,10 @@ SUPPORTED_METHOD_OUTPUTS <- list(
       label = "sPCA",
       color = "#72B7B2",
       order = 2L,
-      blurb = "Deterministic given the penalty. Each rank is fit over a grid of penalties (para); the one with the best Index of Sparseness is the representative."
+      blurb = paste0(
+        "Deterministic given the penalty. Each rank is fit over a grid of penalties ",
+        "(para); the one with the best Index of Sparseness is the representative."
+      )
     ),
     family = "param_grid",
     sign_ambiguous = TRUE,
@@ -236,7 +242,10 @@ SUPPORTED_METHOD_OUTPUTS <- list(
       label = "ICA",
       color = "#F58518",
       order = 3L,
-      blurb = "FastICA over a seed sweep plus bootstrap resamples (for ICASSO). Components are matched across fits by |similarity|."
+      blurb = paste0(
+        "FastICA over a seed sweep plus bootstrap resamples (for ICASSO). Components ",
+        "are matched across fits by |similarity|."
+      )
     ),
     family = "seed_sweep",
     sign_ambiguous = TRUE,
@@ -265,7 +274,10 @@ SUPPORTED_METHOD_OUTPUTS <- list(
       label = "CoGAPS",
       color = "#B279A2",
       order = 5L,
-      blurb = "CoGAPS over a seed sweep per rank. Each rank's representative is the lowest-error seed."
+      blurb = paste0(
+        "CoGAPS over a seed sweep per rank. Each rank's representative is the ",
+        "lowest-error seed."
+      )
     ),
     family = "seed_sweep",
     sign_ambiguous = FALSE,
@@ -279,7 +291,10 @@ SUPPORTED_METHOD_OUTPUTS <- list(
       label = "WGCNA",
       color = "#E45756",
       order = 6L,
-      blurb = "One network per soft-threshold power; modules are compared across powers by gene overlap (ARI)."
+      blurb = paste0(
+        "One network per soft-threshold power; modules are compared across powers by ",
+        "gene overlap (ARI)."
+      )
     ),
     family = "param_grid",
     sign_ambiguous = FALSE,
@@ -301,26 +316,32 @@ method_display <- function(method) {
 
 #' Schema columns of every table
 #'
-#' Reads the column names from the schema by creating it in memory once.
+#' The column names of every table in `inst/sql/schema.sql`, kept as internal package
+#' data (`R/sysdata.rda`, made by `data-raw/schema_columns.R`) so that reading them
+#' costs nothing; reading them from the schema takes about 40 ms and they are needed
+#' hundreds of times in an ingest. A test fails if the saved lists differ from
+#' `read_schema_columns()`.
 #'
 #' @return Named list of character vectors (table -> columns, in schema order).
 #' @noRd
-schema_columns <- local({
-  cache <- NULL
-  function() {
-    if (is.null(cache)) {
-      con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
-      on.exit(DBI::dbDisconnect(con), add = TRUE)
-      for (stmt in read_sql_statements(sql_path("schema.sql"))) DBI::dbExecute(con, stmt)
-      tabs <- DBI::dbListTables(con)
-      cache <<- stats::setNames(
-        lapply(tabs, function(t) DBI::dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))$name),
-        tabs
-      )
-    }
-    cache
-  }
-})
+schema_columns <- function() schema_columns_data
+
+#' Read the column names of every table from the schema
+#'
+#' Creates the schema in memory. Used to make `schema_columns_data` and to test it.
+#'
+#' @return Named list of character vectors (table -> columns, in schema order).
+#' @noRd
+read_schema_columns <- function() {
+  con <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+  for (stmt in read_sql_statements(sql_path("schema.sql"))) DBI::dbExecute(con, stmt)
+  tabs <- DBI::dbListTables(con)
+  stats::setNames(
+    lapply(tabs, function(t) DBI::dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))$name),
+    tabs
+  )
+}
 
 #' Columns of a results-output table
 #'

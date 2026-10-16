@@ -37,12 +37,21 @@ ingest_parallel_targets <- function(config) {
   db_path <- config$db_path
   ids <- sort(config$datasets %||% read_manifest(root)$datasets, method = "radix")
   nm <- function(prefix, id) paste0(prefix, "_", gsub("[^A-Za-z0-9_]", "_", id))
-  main <- function(name, command, ...) targets::tar_target_raw(name, command, deployment = "main", ...)
+  main <- function(name, command, ...) {
+    targets::tar_target_raw(
+      name,
+      command,
+      deployment = "main",
+      ...
+    )
+  }
   on <- function(name, command, controller, ...) {
     targets::tar_target_raw(
       name,
       command,
-      resources = targets::tar_resources(crew = targets::tar_resources_crew(controller = controller)),
+      resources = targets::tar_resources(
+        crew = targets::tar_resources_crew(controller = controller)
+      ),
       ...
     )
   }
@@ -50,10 +59,17 @@ ingest_parallel_targets <- function(config) {
   work_dir <- config$work_dir
   mode <- config$artifact_mode
 
-  manifest <- main("results_manifest", substitute(file.path(ROOT, "manifest.json"), list(ROOT = root)), format = "file")
+  manifest <- main(
+    "results_manifest",
+    substitute(file.path(ROOT, "manifest.json"), list(ROOT = root)),
+    format = "file"
+  )
   cross <- main(
     "results_cross_dataset",
-    substitute(if (dir.exists(DIR)) DIR else character(), list(DIR = file.path(root, "cross_dataset"))),
+    substitute(
+      if (dir.exists(DIR)) DIR else character(),
+      list(DIR = file.path(root, "cross_dataset"))
+    ),
     format = "file"
   )
   targets_list <- list(manifest, cross)
@@ -301,7 +317,12 @@ ingest_parallel <- function(
     ),
     script
   )
-  cli::cli_inform("Building {.file {db_path}} in parallel with the {.val {controller$controllers[[1]]$launcher$name}} controllers.")
+  cli::cli_inform(
+    paste0(
+      "Building {.file {db_path}} in parallel with the ",
+      "{.val {controller$controllers[[1]]$launcher$name}} controllers."
+    )
+  )
   targets::tar_make(script = script, store = store, callr_function = NULL, reporter = "silent")
   invisible(targets::tar_progress(store = store))
 }

@@ -26,6 +26,18 @@ test_that("a database of another version is refused", {
 
 test_that("read_sql_statements splits on lines holding only ;;", {
   path <- withr::local_tempfile(fileext = ".sql")
-  writeLines(c("-- comment", "CREATE TABLE a (x)", ";;", "CREATE TABLE b (y)", ";;", "-- only a comment"), path)
+  writeLines(
+    c("-- comment", "CREATE TABLE a (x)", ";;", "CREATE TABLE b (y)", ";;", "-- only a comment"),
+    path
+  )
   expect_equal(read_sql_statements(path), c("-- comment\nCREATE TABLE a (x)", "CREATE TABLE b (y)"))
+})
+
+test_that("the saved schema columns match inst/sql/schema.sql", {
+  expect_identical(
+    schema_columns(),
+    read_schema_columns(),
+    label = "schema_columns() (R/sysdata.rda)",
+    expected.label = "the columns read from schema.sql; run data-raw/schema_columns.R"
+  )
 })

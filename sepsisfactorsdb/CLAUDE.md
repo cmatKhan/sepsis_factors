@@ -27,6 +27,9 @@ packages to remove (`yaml`, `clue`, `mclust`) and the contract catch-up. Add not
   output.
 - The ingest workflow (`flow.R`, `use_ingest()`) is a targets project kept for its restart behaviour; if
   it is more trouble than it is worth, remove it.
+- After any change to `inst/sql/schema.sql`, run `Rscript data-raw/schema_columns.R`: it saves the column lists
+  as internal data (`R/sysdata.rda`), which `contract_columns()` and the loaders read instead of the schema
+  (reading it costs ~40 ms and is needed hundreds of times per ingest). `test-schema.R` fails if they differ.
 - Do not add DBI-free shortcuts around `open_stability_db()`: it enforces the schema version.
 - Tests: `devtools::test()`. The fixture is a tiny synthetic results tree (`example_results.R`).
 - Schema 4 decisions are in the root `TODO.md` (sections 5 and 6.2); the database is complete on its own

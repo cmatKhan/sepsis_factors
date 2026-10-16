@@ -14,12 +14,18 @@
 #' @noRd
 agreement_sets <- function(ctx, fit) {
   if (fit$method == "wgcna") {
-    d <- DBI::dbGetQuery(ctx$con, "SELECT gene, module FROM gene_modules WHERE fit_id = ? AND module != 0", params = list(fit$fit_id))
+    d <- DBI::dbGetQuery(
+      ctx$con,
+      "SELECT gene, module FROM gene_modules WHERE fit_id = ? AND module != 0",
+      params = list(fit$fit_id)
+    )
     if (nrow(d) == 0L) {
       return(NULL)
     }
     sets <- split(gene_idx_of(ctx, d$gene, "a WGCNA module"), d$module)
-    return(list(sets_at = function(n_top) sets, index = as.integer(names(sets)), n_max = length(sets)))
+    return(
+      list(sets_at = function(n_top) sets, index = as.integer(names(sets)), n_max = length(sets))
+    )
   }
   L <- read_fit_artifact(ctx, fit$fit_id, "loadings")
   if (is.null(L)) {
@@ -27,7 +33,10 @@ agreement_sets <- function(ctx, fit) {
   }
   gi <- gene_idx_of(ctx, rownames(L), "the loadings")
   keep <- min(max(AGREEMENT_TOP_N), nrow(L))
-  ranked <- lapply(seq_len(ncol(L)), function(j) gi[order(abs(L[, j]), decreasing = TRUE)[seq_len(keep)]])
+  ranked <- lapply(
+    seq_len(ncol(L)),
+    function(j) gi[order(abs(L[, j]), decreasing = TRUE)[seq_len(keep)]]
+  )
   list(
     sets_at = function(n_top) lapply(ranked, function(r) r[seq_len(min(n_top, length(r)))]),
     index = seq_len(ncol(L)),
@@ -69,8 +78,11 @@ cluster_samples <- function(S, k = 4L) {
 #'   `representative`.
 #' @noRd
 agreement_fits <- function(fits) {
-  reps <- fits[fits$status == "ok" & fits$representative == 1L & fits$method %in% names(SUPPORTED_METHOD_OUTPUTS), , drop = FALSE]
-  reps[order(vapply(reps$method, function(m) method_display(m)$order, 1L), reps$rank, reps$fit_id), , drop = FALSE]
+  reps <- fits[fits$status == "ok" & fits$representative == 1L & fits$method %in% names(
+    SUPPORTED_METHOD_OUTPUTS
+  ), , drop = FALSE]
+  display_order <- vapply(reps$method, function(m) method_display(m)$order, 1L)
+  reps[order(display_order, reps$rank, reps$fit_id), , drop = FALSE]
 }
 
 derive_method_agreement <- function(ctx) {
@@ -85,11 +97,21 @@ derive_method_agreement <- function(ctx) {
     f <- as.list(reps[i, ])
     f$sets <- agreement_sets(ctx, f)
     f$in_scope <- f$fit_id %in% ctx$fits$fit_id
-    f$scores <- if (reps$fit_id[i] %in% ctx$all_fit_files$fit_id[ctx$all_fit_files$kind == "scores"]) read_fit_artifact(ctx, f$fit_id, "scores") else NULL
+    f$scores <- if (
+      reps$fit_id[i] %in% ctx$all_fit_files$fit_id[ctx$all_fit_files$kind == "scores"]
+    ) {
+      read_fit_artifact(ctx, f$fit_id, "scores")
+    } else {
+      NULL
+    }
     if (!is.null(f$sets)) {
       k <- f$sets$n_max
       if (f$method == "pca") {
-        mse <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM fit_diag WHERE fit_id = ? AND name = 'mse_by_rank'", params = list(f$fit_id))$n
+        mse <- DBI::dbGetQuery(
+          con,
+          "SELECT COUNT(*) AS n FROM fit_diag WHERE fit_id = ? AND name = 'mse_by_rank'",
+          params = list(f$fit_id)
+        )$n
         if (mse > 0L) k <- min(k, mse)
       }
       f$variants <- if (f$method == "pca") seq_len(k) else k
@@ -97,18 +119,26 @@ derive_method_agreement <- function(ctx) {
     f
   })
   fits <- Filter(function(f) !is.null(f$sets), fits)
-  clusters <- new.env(parent = emptyenv())
   # only PCA is cut to its first n components; the other methods use every
   # score column (WGCNA has eigengenes beyond its numbered modules)
   score_cols <- function(f, n) if (f$method == "pca") seq_len(n) else seq_len(ncol(f$scores))
-  cluster_of <- function(f, n) {
-    key <- paste(f$fit_id, n)
-    if (is.null(clusters[[key]])) {
-      S <- f$scores[, score_cols(f, n), drop = FALSE]
-      clusters[[key]] <- if (nrow(S) >= 4L) cluster_samples(S) else NA
+  # the sample clustering of every (fit, n) pair is needed by many method pairs, so make it
+  # once per fit here
+  fits <- lapply(fits, function(f) {
+    f$clusters <- if (is.null(f$scores)) {
+      list()
+    } else {
+      stats::setNames(
+        lapply(f$variants, function(n) {
+          S <- f$scores[, score_cols(f, n), drop = FALSE]
+          if (nrow(S) >= 4L) cluster_samples(S) else NA
+        }),
+        f$variants
+      )
     }
-    clusters[[key]]
-  }
+    f
+  })
+  cluster_of <- function(f, n) f$clusters[[as.character(n)]]
   ari_of <- function(fa, na, fb, nb) {
     if (is.null(fa$scores) || is.null(fb$scores)) {
       return(c(NA_real_, NA_real_))
@@ -153,7 +183,9 @@ derive_method_agreement <- function(ctx) {
               ari = aris[[key]][1],
               shared = aris[[key]][2],
               matrix = encode_f32(jm),
-              matches = encode_i32(c(fa$sets$index[seq_len(na)], fb$sets$index[seq_len(nb)], idx[, "a"], idx[, "b"]))
+              matches = encode_i32(
+                c(fa$sets$index[seq_len(na)], fb$sets$index[seq_len(nb)], idx[, "a"], idx[, "b"])
+              )
             )
           }
         }

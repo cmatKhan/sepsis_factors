@@ -55,7 +55,9 @@ place_artifacts <- function(from, to, mode = c("link", "copy", "move", "symlink"
     return(invisible(to))
   }
   for (dir in unique(dirname(to))) dir.create(dir, recursive = TRUE, showWarnings = FALSE)
-  same <- normalizePath(from, mustWork = TRUE) == suppressWarnings(normalizePath(to, mustWork = FALSE))
+  same <- normalizePath(from, mustWork = TRUE) == suppressWarnings(
+    normalizePath(to, mustWork = FALSE)
+  )
   from <- from[!same]
   to <- to[!same]
   if (!length(from)) {
@@ -75,7 +77,9 @@ place_artifacts <- function(from, to, mode = c("link", "copy", "move", "symlink"
     left <- !done
     ok <- file.copy(from[left], to[left], overwrite = TRUE)
     if (!all(ok)) {
-      cli::cli_abort("Could not place {sum(!ok)} artifact file{?s}, e.g. {.file {from[left][!ok][1]}}.")
+      cli::cli_abort(
+        "Could not place {sum(!ok)} artifact file{?s}, e.g. {.file {from[left][!ok][1]}}."
+      )
     }
     if (mode == "move") unlink(from[left])
   }
@@ -86,8 +90,8 @@ place_artifacts <- function(from, to, mode = c("link", "copy", "move", "symlink"
 #'
 #' Files under the dataset's artifact directory in the database tree that no
 #' row references (`fit_artifacts`, `pattern_drivers`, `projections`), e.g.
-#' fits dropped from a grid or keys from an earlier load. Only the database's tree is touched, never the
-#' results output.
+#' fits dropped from a grid or keys from an earlier load. Only the database's tree is touched,
+#' never the results output.
 #'
 #' @param con DB connection.
 #' @param db_path Path to the database.

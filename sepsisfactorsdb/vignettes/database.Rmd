@@ -148,6 +148,9 @@ number), then the matched row positions and the matched column positions.
 
 ## Building the database in parallel
 
+How to run the sequential, local-parallel and SLURM builds is in `vignette("building")`; this section
+explains how the parallel build works and why its ids come out the same.
+
 `ingest_results()` loads the datasets one after another into one file, which on a network
 filesystem takes over an hour for 35 datasets (a dataset takes 45 s to 4.5 min, most of it R
 building rows and committing). `ingest_parallel()` instead builds one SQLite **part file** per unit of

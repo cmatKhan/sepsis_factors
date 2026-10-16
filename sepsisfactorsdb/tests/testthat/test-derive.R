@@ -4,32 +4,64 @@ test_that("blobs round trip, with NA kept", {
   expect_equal(decode_i32(encode_i32(c(3L, NA, -4L))), c(3L, NA, -4L))
 })
 
-test_that("genes number the feature metadata", {
-  x <- local_ingested()
-  g <- db_query(x$db, "SELECT * FROM genes WHERE dataset_id = 'TOY1' ORDER BY gene_idx")
-  expect_equal(g$gene_idx, 1:10)
-  expect_equal(g$symbol, paste0("SYM", 1:10))
+test_that("genes number the feature metadata in file order, an empty symbol is NA", {
+  toy <- local_toy_db()
+  save_artifact(
+    toy,
+    data.frame(gene_id = c("E1", "E2", "E3"), symbol = c("S1", "", "S3")),
+    "fm.rds"
+  )
+  ctx <- toy_ctx(toy, toy_fits("pca"), dataset_files = c(feature_metadata = "fm.rds"))
+  expect_equal(derive_genes(ctx), 3L)
+  g <- DBI::dbGetQuery(toy$con, "SELECT * FROM genes ORDER BY gene_idx")
+  expect_equal(g$gene_idx, 1:3)
+  expect_equal(g$gene_id, c("E1", "E2", "E3"))
+  expect_equal(g$symbol, c("S1", NA, "S3"))
+  # running the step again leaves the same rows
+  expect_equal(derive_genes(ctx), 3L)
+  expect_equal(db_count(toy$db, "genes"), 3)
 })
 
-test_that("the optional family columns arrive", {
-  x <- local_ingested()
-  d <- db_query(x$db, "SELECT family, family_position, hf_collection FROM datasets WHERE dataset_id = 'TOY1'")
-  expect_equal(d$family, "TOY1")
-  expect_equal(d$hf_collection, "toy/collection")
+test_that("integer-valued feature ids are written without exponents", {
+  expect_equal(as_id(c(1e5, 12, NA)), c("100000", "12", NA))
+  expect_equal(as_id(factor(c("a", "b"))), c("a", "b"))
+})
+
+test_that("a gene that is not in the feature metadata is an error", {
+  ctx <- list(dataset_id = "D", genes = toy_genes(3))
+  expect_equal(gene_idx_of(ctx, c("G3", "G1"), "the loadings"), c(3L, 1L))
+  expect_snapshot(gene_idx_of(ctx, c("G1", "NOT_A_GENE"), "the loadings"), error = TRUE)
+  expect_error(gene_idx_of(ctx, "x", "the loadings"), class = "sepsisfactorsdb_unmapped_key")
+})
+
+test_that("a dataset without feature metadata cannot be numbered", {
+  toy <- local_toy_db()
+  ctx <- toy_ctx(toy, toy_fits("pca"))
+  expect_snapshot(derive_genes(ctx), error = TRUE)
+  save_artifact(toy, data.frame(gene_id = c("a", "a")), "fm.rds")
+  ctx$dataset_files <- c(feature_metadata = "fm.rds")
+  expect_error(derive_genes(ctx), class = "sepsisfactorsdb_invalid_results")
 })
 
 test_that("factor_top_genes holds the largest loadings on each side", {
-  x <- local_ingested()
-  key <- fit_key_of(x$db, "ica", "AND bootstrap = 0")
-  L <- read_artifact(x$root, "TOY1", paste0(key, "_loadings.rds"))
-  t <- db_query(x$db, sprintf("SELECT t.* FROM factor_top_genes t JOIN fits f USING (fit_id) WHERE f.fit_key = '%s'", key))
-  one <- t[t$factor_index == 1 & t$side == "pos", ]
-  expect_equal(one$gene_idx[1], unname(which.max(L[, 1])))
-  expect_equal(one$loading[1], max(L[, 1]))
-  expect_equal(nrow(one), sum(L[, 1] > 0))
-  neg <- t[t$factor_index == 1 & t$side == "neg", ]
-  expect_true(all(neg$loading < 0))
-  expect_equal(neg$loading[1], min(L[, 1]))
+  toy <- local_toy_db()
+  L <- cbind(
+    c(G1 = 0.5, G2 = -0.9, G3 = 0.1, G4 = 0.7, G5 = -0.2),
+    c(G1 = 1, G2 = 2, G3 = 3, G4 = 4, G5 = 5)
+  )
+  save_artifact(toy, L, "loadings.rds")
+  fit_files <- data.frame(fit_id = 1L, kind = "loadings", file = "loadings.rds")
+  ctx <- toy_ctx(toy, toy_fits("ica"), fit_files, genes = toy_genes(5))
+  expect_equal(derive_factor_top_genes(ctx, top = 2L), 6L)
+  t <- DBI::dbGetQuery(toy$con, "SELECT * FROM factor_top_genes ORDER BY factor_index, side, rank")
+  one_neg <- t[t$factor_index == 1 & t$side == "neg", ]
+  expect_equal(one_neg$gene_idx, c(2L, 5L))
+  expect_equal(one_neg$loading, c(-0.9, -0.2))
+  one_pos <- t[t$factor_index == 1 & t$side == "pos", ]
+  expect_equal(one_pos$gene_idx, c(4L, 1L))
+  expect_equal(one_pos$rank, 1:2)
+  # a factor with no negative loading has no negative side
+  expect_false(any(t$factor_index == 2 & t$side == "neg"))
 })
 
 test_that("factor_top_genes keeps at most the top genes per side", {
@@ -41,57 +73,48 @@ test_that("factor_top_genes keeps at most the top genes per side", {
 })
 
 test_that("fit_scores decode to the scores", {
-  x <- local_ingested()
-  key <- fit_key_of(x$db, "nmf")
-  S <- read_artifact(x$root, "TOY1", paste0(key, "_scores.rds"))
-  r <- db_query(x$db, sprintf("SELECT s.* FROM fit_scores s JOIN fits f USING (fit_id) WHERE f.fit_key = '%s'", key))
-  expect_equal(jsonlite::fromJSON(r$row_ids), rownames(S))
-  expect_equal(r$n_factors, ncol(S))
-  con <- DBI::dbConnect(RSQLite::SQLite(), x$db)
-  withr::defer(DBI::dbDisconnect(con))
-  blob <- DBI::dbGetQuery(con, sprintf("SELECT data FROM fit_scores WHERE fit_id = %d", r$fit_id))$data[[1]]
-  expect_equal(matrix(decode_f32(blob), nrow(S)), unname(S), tolerance = 1e-6)
-  # every fit with scores has a row, WGCNA's eigengenes included
-  n <- db_query(x$db, "SELECT COUNT(*) AS n FROM fit_artifacts WHERE kind = 'scores'")$n
-  expect_equal(db_count(x$db, "fit_scores"), n)
+  toy <- local_toy_db()
+  S <- matrix(c(1.5, 2, NA, 4, 5, 6), 3, dimnames = list(c("a", "b", "c"), NULL))
+  save_artifact(toy, S, "scores.rds")
+  fit_files <- data.frame(fit_id = 1L, kind = "scores", file = "scores.rds")
+  ctx <- toy_ctx(toy, toy_fits("nmf"), fit_files)
+  expect_equal(derive_fit_scores(ctx), 1L)
+  r <- DBI::dbGetQuery(toy$con, "SELECT * FROM fit_scores")
+  expect_equal(jsonlite::fromJSON(r$row_ids), c("a", "b", "c"))
+  expect_equal(r$n_factors, 2)
+  expect_equal(matrix(decode_f32(r$data[[1]]), 3), unname(S), tolerance = 1e-6)
+  saveRDS(unname(S), file.path(toy$dir, "scores.rds"))
+  expect_error(derive_fit_scores(ctx), "no sample names")
 })
 
 test_that("fit_diag holds PCA's per-rank values only", {
-  x <- local_ingested()
-  d <- db_query(x$db, "SELECT f.method, d.name, d.idx, d.value FROM fit_diag d JOIN fits f USING (fit_id)
-                       WHERE f.dataset_id = 'TOY1'")
-  expect_equal(unique(d$method), "pca")
+  toy <- local_toy_db()
+  save_artifact(toy, list(mse_by_rank = c(1, 0.6, 0.3), sdev = c(2, 1, 0.5)), "pca_diag.rds")
+  save_artifact(toy, list(mse_by_rank = c(9, 9)), "nmf_diag.rds")
+  fit_files <- data.frame(fit_id = 1:2, kind = "diag", file = c("pca_diag.rds", "nmf_diag.rds"))
+  ctx <- toy_ctx(toy, toy_fits(c("pca", "nmf")), fit_files)
+  expect_equal(derive_fit_diag(ctx), 6L)
+  d <- DBI::dbGetQuery(toy$con, "SELECT * FROM fit_diag")
+  expect_equal(unique(d$fit_id), 1L)
   expect_equal(d$value[d$name == "mse_by_rank"], c(1, 0.6, 0.3))
   expect_equal(d$value[d$name == "sdev"], c(2, 1, 0.5))
 })
 
 test_that("a WGCNA dendrogram decodes to the hclust pieces", {
-  x <- local_ingested()
-  key <- fit_key_of(x$db, "wgcna", "AND representative = 1")
-  d <- read_artifact(x$root, "TOY1", paste0(key, "_dendrogram.rds"))
-  con <- DBI::dbConnect(RSQLite::SQLite(), x$db)
-  withr::defer(DBI::dbDisconnect(con))
-  r <- DBI::dbGetQuery(con, sprintf("SELECT w.* FROM wgcna_dendrograms w JOIN fits f USING (fit_id) WHERE f.fit_key = '%s'", key))
-  expect_equal(r$n, 10)
-  expect_equal(matrix(decode_i32(r$merge[[1]]), ncol = 2), d$merge)
-  expect_equal(decode_f32(r$height[[1]]), d$height, tolerance = 1e-6)
-  expect_equal(decode_i32(r$ord[[1]]), d$order)
-  expect_equal(decode_i32(r$gene_idx[[1]]), 1:10)
-})
-
-test_that("driver genes are reduced per mode", {
-  x <- local_ingested()
-  d <- db_query(x$db, "SELECT p.mode, g.* FROM driver_genes g JOIN pattern_drivers p USING (driver_id)")
-  ci <- d[d$mode == "CI", ]
-  pv <- d[d$mode == "PV", ]
-  expect_true(all(c(1, 2) %in% ci$gene_idx[ci$shared == 1]))
-  expect_lte(nrow(ci), 10)
-  expect_false(anyNA(ci$low))
-  expect_true(all(is.na(ci$mean_diff)))
-  expect_setequal(pv$gene_idx, 1:3)
-  expect_equal(sort(pv$gene_idx[pv$shared == 1]), 1:2)
-  expect_false(anyNA(pv$weight))
-  expect_true(all(is.na(pv$low)))
+  toy <- local_toy_db()
+  x <- matrix(c(1, 2, 4, 8, 16), 5, dimnames = list(paste0("G", 5:1), NULL))
+  h <- stats::hclust(stats::dist(x))
+  d <- list(merge = h$merge, height = h$height, order = h$order, labels = h$labels)
+  save_artifact(toy, d, "d.rds")
+  fit_files <- data.frame(fit_id = 1L, kind = "dendrogram", file = "d.rds")
+  ctx <- toy_ctx(toy, toy_fits("wgcna"), fit_files, genes = toy_genes(5))
+  expect_equal(derive_wgcna_dendrograms(ctx), 1L)
+  r <- DBI::dbGetQuery(toy$con, "SELECT * FROM wgcna_dendrograms")
+  expect_equal(r$n, 5)
+  expect_equal(matrix(decode_i32(r$merge[[1]]), ncol = 2), h$merge)
+  expect_equal(decode_f32(r$height[[1]]), h$height, tolerance = 1e-6)
+  expect_equal(decode_i32(r$ord[[1]]), h$order)
+  expect_equal(decode_i32(r$gene_idx[[1]]), 5:1)
 })
 
 test_that("reduce_driver keeps the top CI genes and every shared gene", {
@@ -107,117 +130,107 @@ test_that("reduce_driver keeps the top CI genes and every shared gene", {
   expect_equal(nrow(out), 27)
   expect_true(all(c("g1", "g100", "g50", "g51") %in% out$gene))
   expect_equal(sum(out$shared), 2)
+  expect_false(anyNA(out$low))
+  expect_true(all(is.na(out$mean_diff)))
+})
+
+test_that("reduce_driver keeps significant and shared genes in PV mode", {
+  res <- list(
+    weighted_mean_stats = data.frame(
+      gene = c("a", "b", "c", "d"),
+      mean_diff = c(1, 2, 3, 4),
+      welch_padj = c(0.01, 0.5, 0.2, NA)
+    ),
+    normalized_weights = c(a = 0.1, b = 0.2, c = 0.3, d = 0.4, z = 0.9),
+    sig_genes = list(PV_significant_shared_genes = c("c", "z"))
+  )
+  out <- reduce_driver(res, "PV")
+  expect_setequal(out$gene, c("a", "c", "z"))
+  expect_equal(out$shared[order(out$gene)], c(0L, 1L, 1L))
+  # a shared gene without statistics is added with NA statistics
+  expect_true(is.na(out$mean_diff[out$gene == "z"]))
+  expect_equal(out$weight[out$gene == "z"], 0.9)
+  expect_true(all(is.na(out$low)))
+  expect_false(anyNA(out$weight))
 })
 
 test_that("sample metadata is stored long with its R class", {
-  x <- local_ingested()
-  m <- db_query(x$db, "SELECT * FROM sample_metadata WHERE dataset_id = 'TOY1' AND sample_id = 'TOY1_S2'")
+  toy <- local_toy_db()
+  save_artifact(
+    toy,
+    data.frame(
+      sample_id = c("S1", "S2"),
+      age = c(30, 41),
+      subject = c(1L, 2L),
+      group = c("a", NA),
+      stringsAsFactors = FALSE
+    ),
+    "meta.rds"
+  )
+  ctx <- toy_ctx(toy, toy_fits("pca"), dataset_files = c(sample_metadata = "meta.rds"))
+  expect_equal(derive_sample_metadata(ctx), 6L)
+  m <- DBI::dbGetQuery(toy$con, "SELECT * FROM sample_metadata WHERE sample_id = 'S2'")
   expect_equal(m$value[m$field == "age"], "41")
   expect_equal(m$type[m$field == "age"], "numeric")
   expect_equal(m$type[m$field == "subject"], "integer")
   expect_equal(m$type[m$field == "group"], "character")
   expect_false("sample_id" %in% m$field)
+  # a dataset without sample metadata has no rows
+  ctx$dataset_files <- character()
+  expect_equal(derive_sample_metadata(ctx), 0L)
+  expect_equal(db_count(toy$db, "sample_metadata"), 0)
 })
 
 test_that("gene variance matches genes by id, then by symbol", {
-  root <- local_results()
+  toy <- local_toy_db()
   vp <- list(gene_summary = data.frame(
-    gene = c("ENSG00000000001", "SYM2", "SYM3"),
+    gene = c("G1", "SYM2", "G3"),
     time_all = c(0.1, 0.2, 0.3),
     factor_gene = c(TRUE, FALSE, TRUE)
   ))
-  saveRDS(vp, file.path(root, "datasets", "TOY1", "artifacts", "variance_partition.rds"))
-  edit_table(root, "TOY1", "dataset_artifacts", function(df) {
-    rbind(df, data.frame(dataset_id = "TOY1", kind = "variance_partition", path = "variance_partition.rds"))
-  })
-  db <- local_db()
-  ingest_results(root, db)
-  g <- db_query(db, "SELECT * FROM gene_variance ORDER BY gene_idx")
+  save_artifact(toy, vp, "vp.rds")
+  genes <- toy_genes(3, symbols = c("SYM1", "SYM2", "SYM3"))
+  files <- c(variance_partition = "vp.rds")
+  ctx <- toy_ctx(toy, toy_fits("pca"), dataset_files = files, genes = genes)
+  expect_equal(derive_gene_variance(ctx), 3L)
+  g <- DBI::dbGetQuery(toy$con, "SELECT * FROM gene_variance ORDER BY gene_idx")
   expect_equal(g$gene_idx, 1:3)
   expect_equal(g$factor_gene, c(1, 0, 1))
   expect_equal(g$time_all, c(0.1, 0.2, 0.3))
-})
-
-test_that("a gene that is not in the feature metadata is an error", {
-  root <- local_results()
-  f <- list.files(file.path(root, "datasets", "TOY1", "artifacts"), pattern = "_loadings\\.rds$", full.names = TRUE)[1]
-  L <- readRDS(f)
-  rownames(L)[1] <- "NOT_A_GENE"
-  saveRDS(L, f)
-  expect_snapshot(ingest_results(root, local_db()), error = TRUE, transform = scrub_tmp)
-  expect_error(ingest_results(root, local_db()), class = "sepsisfactorsdb_unmapped_key")
-})
-
-test_that("a dataset without feature metadata cannot be numbered", {
-  root <- local_results()
-  edit_table(root, "TOY1", "dataset_artifacts", function(df) df[df$kind != "feature_metadata", ])
-  expect_snapshot(ingest_results(root, local_db()), error = TRUE, transform = scrub_tmp)
+  vp$gene_summary$gene[1] <- "nowhere"
+  save_artifact(toy, vp, "vp.rds")
+  expect_error(derive_gene_variance(ctx), class = "sepsisfactorsdb_unmapped_key")
 })
 
 test_that("projection values hold weights, p values and r squared", {
-  x <- local_ingested()
-  path <- db_query(x$db, "SELECT path FROM projections")$path
-  p <- readRDS(resolve_artifact(path, x$db))
-  con <- DBI::dbConnect(RSQLite::SQLite(), x$db)
-  withr::defer(DBI::dbDisconnect(con))
-  r <- DBI::dbGetQuery(con, "SELECT * FROM projection_values")
-  expect_equal(jsonlite::fromJSON(r$row_ids), rownames(p$projection))
-  expect_equal(jsonlite::fromJSON(r$col_ids), colnames(p$projection))
-  v <- decode_f32(r$data[[1]])
-  expect_length(v, 12 + 12 + 4)
-  expect_equal(v[1:12], as.vector(p$projection), tolerance = 1e-6)
-  expect_equal(v[13:24], as.vector(p$pval), tolerance = 1e-6)
-  expect_equal(v[25:28], unname(p$r_squared), tolerance = 1e-6)
+  p <- matrix(c(1, 2, 3, 4, 5, 6), 2, dimnames = list(c("c1", "c2"), c("s1", "s2", "s3")))
+  x <- list(projection = p, pval = p / 10, r_squared = c(s3 = 0.3, s1 = 0.1, s2 = 0.2))
+  e <- encode_projection(x, "p.rds")
+  expect_equal(jsonlite::fromJSON(e$row_ids), c("c1", "c2"))
+  expect_equal(jsonlite::fromJSON(e$col_ids), c("s1", "s2", "s3"))
+  v <- decode_f32(e$data)
+  expect_length(v, 6 + 6 + 3)
+  expect_equal(v[1:6], as.vector(p), tolerance = 1e-6)
+  expect_equal(v[7:12], as.vector(p) / 10, tolerance = 1e-6)
+  # r squared follows the column order of the projection
+  expect_equal(v[13:15], c(0.1, 0.2, 0.3), tolerance = 1e-6)
 })
 
 test_that("a projection file without p values or r squared stores NA", {
-  root <- local_results()
-  f <- list.files(file.path(root, "cross_dataset", "artifacts"), full.names = TRUE)
-  p <- readRDS(f)
-  saveRDS(list(projection = p$projection), f)
-  db <- local_db()
-  ingest_results(root, db)
-  con <- DBI::dbConnect(RSQLite::SQLite(), db)
-  withr::defer(DBI::dbDisconnect(con))
-  v <- decode_f32(DBI::dbGetQuery(con, "SELECT data FROM projection_values")$data[[1]])
-  expect_true(all(is.na(v[13:28])))
-  expect_false(anyNA(v[1:12]))
+  p <- matrix(1:4, 2, dimnames = list(c("a", "b"), c("x", "y")))
+  v <- decode_f32(encode_projection(list(projection = p), "p.rds")$data)
+  expect_false(anyNA(v[1:4]))
+  expect_true(all(is.na(v[5:10])))
 })
 
 test_that("a projection without row and column names is refused", {
   expect_snapshot(encode_projection(list(projection = matrix(1:4, 2)), "p.rds"), error = TRUE)
 })
 
-test_that("the derive step is idempotent", {
-  x <- local_ingested()
-  tables <- c(
-    "genes", "factor_top_genes", "fit_scores", "fit_diag", "wgcna_dendrograms", "driver_genes",
-    "sample_metadata", "fit_summary", "factor_association", "method_agreement", "projection_values"
-  )
-  before <- vapply(tables, db_count, numeric(1), db = x$db)
-  ingest_results(x$root, x$db)
-  expect_equal(vapply(tables, db_count, numeric(1), db = x$db), before)
-  expect_true(all(before > 0))
-})
-
 test_that("the derive step needs the dataset to be loaded first", {
-  root <- local_results()
+  root <- withr::local_tempdir()
+  dir.create(file.path(root, "datasets", "TOY1", "tables"), recursive = TRUE)
   db <- local_db()
   DBI::dbDisconnect(open_stability_db(db))
   expect_error(derive_dataset(root, db, "TOY1"), class = "sepsisfactorsdb_unmapped_key")
-})
-
-test_that("a new database records its provenance", {
-  x <- local_ingested()
-  m <- db_query(x$db, "SELECT key, value FROM meta")
-  expect_setequal(m$key, c("schema_version", "created_at", "writer", "writer_version"))
-  expect_equal(m$value[m$key == "schema_version"], as.character(SCHEMA_VERSION))
-})
-
-test_that("methods carry their display metadata", {
-  x <- local_ingested()
-  m <- db_query(x$db, "SELECT * FROM methods ORDER BY display_order")
-  expect_equal(m$method, c("pca", "spca", "ica", "nmf", "cogaps", "wgcna"))
-  expect_equal(m$label, c("PCA", "sPCA", "ICA", "NMF", "CoGAPS", "WGCNA"))
-  expect_true(all(grepl("^#[0-9A-F]{6}$", m$color)))
 })

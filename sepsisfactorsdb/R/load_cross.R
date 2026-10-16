@@ -14,7 +14,12 @@
 #'   a list: `n_projections`, `n_gene_space`, `orphans_removed` (per dataset),
 #'   `written_at`.
 #' @export
-load_cross_dataset <- function(results_root, db_path, artifact_mode = "link", artifact_base = db_path) {
+load_cross_dataset <- function(
+  results_root,
+  db_path,
+  artifact_mode = "link",
+  artifact_base = db_path
+) {
   cdir <- results_cross_dir(results_root)
   tdir <- file.path(cdir, "tables")
   if (!dir.exists(tdir)) {
@@ -40,7 +45,10 @@ load_cross_dataset <- function(results_root, db_path, artifact_mode = "link", ar
     if (length(unknown)) {
       cli::cli_abort(
         c(
-          "Projections target {cli::qty(length(unknown))}dataset{?s} {.val {unknown}}, which {?is/are} not in the database.",
+          paste0(
+            "Projections target {cli::qty(length(unknown))}dataset{?s} ",
+            "{.val {unknown}}, which {?is/are} not in the database."
+          ),
           "i" = "Load every dataset the cross-dataset tables refer to first."
         ),
         class = "sepsisfactorsdb_unmapped_key"

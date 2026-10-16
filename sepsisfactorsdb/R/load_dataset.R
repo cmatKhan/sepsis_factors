@@ -95,7 +95,13 @@ pointer_artifact_files <- function(tables) {
 #'   database.
 #' @return A list: `dataset_id`, `fits` (counts by status), `written_at`.
 #' @export
-load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "link", artifact_base = db_path) {
+load_dataset <- function(
+  results_root,
+  db_path,
+  dataset_id,
+  artifact_mode = "link",
+  artifact_base = db_path
+) {
   ddir <- results_dataset_dir(results_root, dataset_id)
   files <- list_table_files(file.path(ddir, "tables"))
   tables <- lapply(files, read_result_table)
@@ -117,8 +123,9 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
   with_transaction(con, {
     # ---- dataset + methods ----
     ds <- db_columns(tab("datasets"), "datasets")
+    ds_schema_cols <- schema_columns()$datasets
     for (col in setdiff(contract_columns("datasets", include_optional = TRUE), names(ds))) {
-      if (col %in% schema_columns()$datasets) ds[[col]] <- NA
+      if (col %in% ds_schema_cols) ds[[col]] <- NA
     }
     cols <- names(ds)
     DBI::dbExecute(
@@ -127,7 +134,10 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
         "INSERT INTO datasets (%s) VALUES (%s) ON CONFLICT(dataset_id) DO UPDATE SET %s",
         paste(cols, collapse = ", "),
         paste(rep("?", length(cols)), collapse = ", "),
-        paste(sprintf("%s = excluded.%s", setdiff(cols, "dataset_id"), setdiff(cols, "dataset_id")), collapse = ", ")
+        paste(
+          sprintf("%s = excluded.%s", setdiff(cols, "dataset_id"), setdiff(cols, "dataset_id")),
+          collapse = ", "
+        )
       ),
       params = unname(as.list(ds))
     )
@@ -135,12 +145,17 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
     for (i in seq_len(nrow(mt))) {
       d <- method_display(mt$method[i])
       q(
-        "INSERT INTO methods (method, family, sign_ambiguous, has_loadings, label, color, display_order, blurb)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(method) DO UPDATE SET family = excluded.family,
-           sign_ambiguous = excluded.sign_ambiguous, has_loadings = excluded.has_loadings,
-           label = excluded.label, color = excluded.color, display_order = excluded.display_order,
-           blurb = excluded.blurb",
+        paste0(
+          "INSERT INTO methods (method, family, sign_ambiguous, has_loadings, label, color, ",
+          "display_order, blurb)\n",
+          "         VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n",
+          "         ON CONFLICT(method) DO UPDATE SET family = excluded.family,\n",
+          "           sign_ambiguous = excluded.sign_ambiguous, has_loadings = ",
+          "excluded.has_loadings,\n",
+          "           label = excluded.label, color = excluded.color, display_order = ",
+          "excluded.display_order,\n",
+          "           blurb = excluded.blurb"
+        ),
         mt$method[i],
         mt$family[i],
         as.integer(mt$sign_ambiguous[i]),
@@ -179,7 +194,13 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
     # ---- fits: upsert by fit_key, drop fits no longer in the results ----
     fits <- db_columns(tab("fits"), "fits")
     DBI::dbWriteTable(con, "new_fits", fits, temporary = TRUE, overwrite = TRUE)
-    q("DELETE FROM fits WHERE dataset_id = ? AND fit_key NOT IN (SELECT fit_key FROM temp.new_fits)", id)
+    q(
+      paste0(
+        "DELETE FROM fits WHERE dataset_id = ? AND fit_key NOT IN (SELECT fit_key FROM ",
+        "temp.new_fits)"
+      ),
+      id
+    )
     fit_cols <- names(fits)
     DBI::dbExecute(
       con,
@@ -188,12 +209,19 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
          ON CONFLICT(fit_key) DO UPDATE SET %s",
         paste(fit_cols, collapse = ", "),
         paste(fit_cols, collapse = ", "),
-        paste(sprintf("%s = excluded.%s", setdiff(fit_cols, "fit_key"), setdiff(fit_cols, "fit_key")), collapse = ", ")
+        paste(
+          sprintf("%s = excluded.%s", setdiff(fit_cols, "fit_key"), setdiff(fit_cols, "fit_key")),
+          collapse = ", "
+        )
       )
     )
     DBI::dbExecute(con, "DROP TABLE temp.new_fits")
     fit_ids <- id_lookup(
-      DBI::dbGetQuery(con, "SELECT fit_id, fit_key FROM fits WHERE dataset_id = ?", params = list(id)),
+      DBI::dbGetQuery(
+        con,
+        "SELECT fit_id, fit_key FROM fits WHERE dataset_id = ?",
+        params = list(id)
+      ),
       "fit_id",
       "fit_key"
     )
@@ -229,7 +257,9 @@ load_dataset <- function(results_root, db_path, dataset_id, artifact_mode = "lin
       }
       known <- paste(df$fit_key, df$factor_index) %in% names(factor_ids)
       if (!all(known)) {
-        cli::cli_warn("Dropped {sum(!known)} {.field {table}} row{?s} for factors not in the database.")
+        cli::cli_warn(
+          "Dropped {sum(!known)} {.field {table}} row{?s} for factors not in the database."
+        )
       }
       df[known, , drop = FALSE]
     }
@@ -365,7 +395,11 @@ load_pairs <- function(con, tab, fid, xid) {
         con,
         "match_scores",
         data.frame(
-          match_id = map_ids(paste(sc$fit_a_key, sc$fit_b_key, sc$factor_a_index), match_id, "factor match"),
+          match_id = map_ids(
+            paste(sc$fit_a_key, sc$fit_b_key, sc$factor_a_index),
+            match_id,
+            "factor match"
+          ),
           metric = sc$metric,
           value = sc$value,
           runner_up = sc$runner_up,

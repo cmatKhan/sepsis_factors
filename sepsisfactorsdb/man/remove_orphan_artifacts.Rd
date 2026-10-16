@@ -19,6 +19,6 @@ Number of files deleted.
 \description{
 Files under the dataset's artifact directory in the database tree that no
 row references (\code{fit_artifacts}, \code{pattern_drivers}, \code{projections}), e.g.
-fits dropped from a grid or keys from an earlier load. Only the database's tree is touched, never the
-results output.
+fits dropped from a grid or keys from an earlier load. Only the database's tree is touched,
+never the results output.
 }

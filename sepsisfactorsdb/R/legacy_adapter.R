@@ -72,7 +72,9 @@ legacy_to_results <- function(
   ids <- datasets %||% all_ids
   absent <- setdiff(ids, all_ids)
   if (length(absent)) {
-    cli::cli_abort("{cli::qty(length(absent))}Dataset{?s} {.val {absent}} {?is/are} not in {.file {db_file}}.")
+    cli::cli_abort(
+      "{cli::qty(length(absent))}Dataset{?s} {.val {absent}} {?is/are} not in {.file {db_file}}."
+    )
   }
   art_root <- file.path(legacy_root, "stability_artifacts")
   mode <- resolve_legacy_mode(artifact_mode, art_root, out_root)
@@ -147,7 +149,10 @@ legacy_place <- function(from, to, mode) {
     cli::cli_abort(
       c(
         "Could not {mode} {.file {from}} to {.file {to}}.",
-        "i" = "Choose another {.arg artifact_mode}; files are never copied unless {.code artifact_mode = \"copy\"}."
+        "i" = paste0(
+          "Choose another {.arg artifact_mode}; files are never copied unless ",
+          "{.code artifact_mode = \"copy\"}."
+        )
       )
     )
   }
@@ -185,7 +190,11 @@ legacy_dataset_config <- function(cfg, id) {
   }
   own <- file.path(cfg$dir, "datasets", id, "config.yml")
   collection <- if (file.exists(own)) yaml::read_yaml(own)$dataset$hf_collection else NULL
-  list(family = family, family_position = as.integer(position), hf_collection = collection %||% NA_character_)
+  list(
+    family = family,
+    family_position = as.integer(position),
+    hf_collection = collection %||% NA_character_
+  )
 }
 
 #' Write one results table, checking it against the contract
@@ -228,7 +237,12 @@ legacy_dataset <- function(con, id, out_root, art_root, mode, cfg) {
   same <- function(table) q(sprintf("SELECT * FROM %s WHERE dataset_id = ?", table))
   # a table keyed by fit_id: fit_key first
   by_fit <- function(table) {
-    q(sprintf("SELECT f.fit_key, t.* FROM %s t JOIN fits f ON f.fit_id = t.fit_id WHERE f.dataset_id = ?", table))
+    q(
+      sprintf(
+        "SELECT f.fit_key, t.* FROM %s t JOIN fits f ON f.fit_id = t.fit_id WHERE f.dataset_id = ?",
+        table
+      )
+    )
   }
   write <- function(df, table, required = FALSE) write_legacy_table(df, table, dir, required)
 
@@ -238,7 +252,16 @@ legacy_dataset <- function(con, id, out_root, art_root, mode, cfg) {
   ds$family_position <- cfg_d$family_position
   ds$hf_collection <- cfg_d$hf_collection
   write(ds, "datasets", required = TRUE)
-  write(q("SELECT * FROM methods WHERE method IN (SELECT DISTINCT method FROM fits WHERE dataset_id = ?)"), "methods", required = TRUE)
+  write(
+    q(
+      paste0(
+        "SELECT * FROM methods WHERE method IN (SELECT DISTINCT method FROM fits WHERE ",
+        "dataset_id = ?)"
+      )
+    ),
+    "methods",
+    required = TRUE
+  )
   write(same("fits"), "fits", required = TRUE)
 
   for (t in c(
@@ -248,7 +271,16 @@ legacy_dataset <- function(con, id, out_root, art_root, mode, cfg) {
   )) {
     write(same(t), t)
   }
-  for (t in c("fit_params", "fit_metrics", "factors", "gene_modules", "module_kme_summary", "module_kme_histograms")) {
+  for (
+    t in c(
+      "fit_params",
+      "fit_metrics",
+      "factors",
+      "gene_modules",
+      "module_kme_summary",
+      "module_kme_histograms"
+    )
+  ) {
     write(by_fit(t), t)
   }
 
@@ -272,9 +304,13 @@ legacy_dataset <- function(con, id, out_root, art_root, mode, cfg) {
   write(pd, "pattern_drivers")
 
   write(
-    q("SELECT fa.fit_key AS fit_a_key, fb.fit_key AS fit_b_key, p.same_rank, p.n_factors_a, p.n_factors_b, p.ari
-       FROM fit_pairs p JOIN fits fa ON fa.fit_id = p.fit_a JOIN fits fb ON fb.fit_id = p.fit_b
-       WHERE fa.dataset_id = ?"),
+    q(paste0(
+      "SELECT fa.fit_key AS fit_a_key, fb.fit_key AS fit_b_key, p.same_rank, p.n_factors_a, ",
+      "p.n_factors_b, p.ari\n",
+      "       FROM fit_pairs p JOIN fits fa ON fa.fit_id = p.fit_a JOIN fits fb ON fb.fit_id = ",
+      "p.fit_b\n",
+      "       WHERE fa.dataset_id = ?"
+    )),
     "fit_pairs"
   )
   pair_join <- "FROM factor_matches m
@@ -341,8 +377,11 @@ legacy_cross <- function(con, ids, out_root, art_root, mode, cfg) {
   }
   pr <- q(
     sprintf(
-      "SELECT f.fit_key AS source_fit_key, p.* FROM projections p JOIN fits f ON f.fit_id = p.source_fit_id
-       WHERE f.dataset_id IN (%s) AND p.target_dataset_id IN (%s)",
+      paste0(
+        "SELECT f.fit_key AS source_fit_key, p.* FROM projections p JOIN fits f ON f.fit_id = ",
+        "p.source_fit_id\n",
+        "       WHERE f.dataset_id IN (%s) AND p.target_dataset_id IN (%s)"
+      ),
       in_ids, in_ids
     )
   )
@@ -354,9 +393,13 @@ legacy_cross <- function(con, ids, out_root, art_root, mode, cfg) {
   write_legacy_table(
     q(
       sprintf(
-        "SELECT a.fit_key AS source_fit_key, b.fit_key AS target_fit_key, g.n_genes_matched, g.mean_abs_diagonal
-         FROM gene_space_agreement g JOIN fits a ON a.fit_id = g.source_fit_id JOIN fits b ON b.fit_id = g.target_fit_id
-         WHERE a.dataset_id IN (%s) AND b.dataset_id IN (%s)",
+        paste0(
+          "SELECT a.fit_key AS source_fit_key, b.fit_key AS target_fit_key, g.n_genes_matched, ",
+          "g.mean_abs_diagonal\n",
+          "         FROM gene_space_agreement g JOIN fits a ON a.fit_id = g.source_fit_id JOIN ",
+          "fits b ON b.fit_id = g.target_fit_id\n",
+          "         WHERE a.dataset_id IN (%s) AND b.dataset_id IN (%s)"
+        ),
         in_ids, in_ids
       )
     ),

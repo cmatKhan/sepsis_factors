@@ -51,7 +51,12 @@ ingest_defaults <- function() {
         setup_lines = list(),
         log_dir = "logs/crew",
         workers = 200L,
-        big = list(memory_gigabytes_required = 32, cpus_per_task = 2L, time_minutes = 480, workers = 20L)
+        big = list(
+          memory_gigabytes_required = 32,
+          cpus_per_task = 2L,
+          time_minutes = 480,
+          workers = 20L
+        )
       )
     )
   )
@@ -82,7 +87,12 @@ ingest_defaults <- function() {
 #'   `big` (a list of the same for the big controller).
 #' @return A [crew::crew_controller_group()].
 #' @export
-ingest_controller <- function(type = c("local", "slurm"), workers = NULL, config = ingest_defaults(), ...) {
+ingest_controller <- function(
+  type = c("local", "slurm"),
+  workers = NULL,
+  config = ingest_defaults(),
+  ...
+) {
   type <- match.arg(type)
   ctl <- config$controller
   seconds_idle <- ctl$seconds_idle %||% 30
@@ -90,7 +100,11 @@ ingest_controller <- function(type = c("local", "slurm"), workers = NULL, config
     n <- workers %||% ctl$workers %||% max(1L, parallel::detectCores() - 2L)
     return(crew::crew_controller_group(
       crew::crew_controller_local(name = "default", workers = n, seconds_idle = seconds_idle),
-      crew::crew_controller_local(name = "big", workers = max(1L, n %/% 2L), seconds_idle = seconds_idle)
+      crew::crew_controller_local(
+        name = "big",
+        workers = max(1L, n %/% 2L),
+        seconds_idle = seconds_idle
+      )
     ))
   }
   spec <- override(override(ingest_defaults()$controller$slurm, ctl$slurm), list(...))

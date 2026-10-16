@@ -15,7 +15,7 @@ sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 3)--
 | Run the analysis: fit PCA, sPCA, ICA, NMF, CoGAPS and WGCNA on the sepsis datasets, and compute stability, enrichment, variance and projections | [`sepsisfactors`](sepsisfactors/) |
 | Add a dataset (a config and a preprocessing script) | [`sepsisfactors`](sepsisfactors/), `use_dataset()` |
 | Request a new method | open an issue; methods are a closed set, implemented in `sepsisfactors` and `sepsisfactorsdb` |
-| Load results into the SQLite database | [`sepsisfactorsdb`](sepsisfactorsdb/) |
+| Load results into the SQLite database (sequentially, in parallel, or on SLURM) | [`sepsisfactorsdb`](sepsisfactorsdb/), `vignette("building")` |
 | Understand the results output or the database layout | [`sepsisfactorsdb`](sepsisfactorsdb/) vignettes `results-output` and `database` |
 | Explore results in the browser | [`sepsisfactorsapp`](sepsisfactorsapp/) |
 

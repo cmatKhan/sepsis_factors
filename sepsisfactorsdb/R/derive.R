@@ -10,7 +10,7 @@
 #   genes, factor_top_genes, fit_scores, fit_diag, wgcna_dendrograms,
 #   driver_genes, sample_metadata, gene_variance      (R/derive_payloads.R)
 #   fit_summary, factor_association                   (R/derive_summaries.R)
-#   method_agreement                                  (R/derive_agreement.R)
+#   method_agreement                                  from R/derive_agreement.R
 #   projection_values                                 (cross-dataset, below)
 #
 # Every step deletes the rows it owns for the dataset and inserts them again,
@@ -128,7 +128,14 @@ as_id <- function(x) {
 #'   artifacts.
 #' @return A list used by the `derive_*` functions.
 #' @noRd
-derive_context <- function(results_root, con, db_path, dataset_id, fit_keys = NULL, artifact_base = db_path) {
+derive_context <- function(
+  results_root,
+  con,
+  db_path,
+  dataset_id,
+  fit_keys = NULL,
+  artifact_base = db_path
+) {
   ddir <- results_dataset_dir(results_root, dataset_id)
   files <- list_table_files(file.path(ddir, "tables"))
   tab <- function(name) if (name %in% names(files)) read_result_table(files[[name]]) else NULL
@@ -142,11 +149,19 @@ derive_context <- function(results_root, con, db_path, dataset_id, fit_keys = NU
   fit_files <- if (is.null(fa)) {
     data.frame(fit_id = integer(), kind = character(), file = character())
   } else {
-    data.frame(fit_id = fits$fit_id[match(fa$fit_key, fits$fit_key)], kind = fa$kind, file = fa$path)
+    data.frame(
+      fit_id = fits$fit_id[match(fa$fit_key, fits$fit_key)],
+      kind = fa$kind,
+      file = fa$path
+    )
   }
   da <- tab("dataset_artifacts")
   dataset_files <- if (is.null(da)) character() else stats::setNames(da$path, da$kind)
-  dataset <- DBI::dbGetQuery(con, "SELECT * FROM datasets WHERE dataset_id = ?", params = list(dataset_id))
+  dataset <- DBI::dbGetQuery(
+    con,
+    "SELECT * FROM datasets WHERE dataset_id = ?",
+    params = list(dataset_id)
+  )
   all_fits <- fits
   if (!is.null(fit_keys)) {
     fits <- fits[fits$fit_key %in% fit_keys, , drop = FALSE]
@@ -163,8 +178,7 @@ derive_context <- function(results_root, con, db_path, dataset_id, fit_keys = NU
     all_fits = all_fits,
     all_fit_files = fit_files,
     fit_files = fit_files[fit_files$fit_id %in% fits$fit_id, , drop = FALSE],
-    dataset_files = dataset_files,
-    genes = new.env(parent = emptyenv())
+    dataset_files = dataset_files
   )
 }
 
@@ -180,7 +194,8 @@ derive_context <- function(results_root, con, db_path, dataset_id, fit_keys = NU
 #' @return The object, or `NULL` when the fit has no such artifact.
 #' @noRd
 read_fit_artifact <- function(ctx, fit_id, kind) {
-  row <- ctx$all_fit_files[ctx$all_fit_files$fit_id == fit_id & ctx$all_fit_files$kind == kind, , drop = FALSE]
+  files <- ctx$all_fit_files
+  row <- files[files$fit_id == fit_id & files$kind == kind, , drop = FALSE]
   if (nrow(row) == 0L) {
     return(NULL)
   }
@@ -210,7 +225,12 @@ artifact_source <- function(ctx, file, pointer) {
   candidates <- if (pointer) c(placed, original) else c(original, placed)
   hit <- candidates[file.exists(candidates)]
   if (!length(hit)) {
-    cli::cli_abort("Artifact {.file {file}} of {.val {ctx$dataset_id}} is in neither the results output nor the database tree.")
+    cli::cli_abort(
+      paste0(
+        "Artifact {.file {file}} of {.val {ctx$dataset_id}} is in neither the results ",
+        "output nor the database tree."
+      )
+    )
   }
   hit[1]
 }
@@ -285,7 +305,7 @@ derive_dataset <- function(
     fits = fit_steps
   )
   if (level == "fits") {
-    load_gene_lookup(ctx)
+    ctx$genes <- load_gene_lookup(ctx)
   }
   out <- data.frame(step = names(steps), rows = NA_integer_, seconds = NA_real_)
   with_transaction(con, {
@@ -293,6 +313,8 @@ derive_dataset <- function(
       t0 <- proc.time()[["elapsed"]]
       out$rows[i] <- as.integer(steps[[i]](ctx))
       out$seconds[i] <- proc.time()[["elapsed"]] - t0
+      # the later steps refer to genes by the numbers the genes step has just written
+      if (names(steps)[i] == "genes") ctx$genes <- load_gene_lookup(ctx)
     }
   })
   out
@@ -300,15 +322,20 @@ derive_dataset <- function(
 
 #' Read the gene numbering of a dataset from the database
 #'
-#' For the fit-level steps of a chunk, which run on a copy of the load part
-#' where `genes` is already filled.
-#'
+#' @param ctx A derive context; the dataset's `genes` rows must be written.
+#' @return A list: `lookup` (gene number named by feature id) and `by_symbol` (named by symbol).
 #' @noRd
 load_gene_lookup <- function(ctx) {
-  g <- DBI::dbGetQuery(ctx$con, "SELECT gene_idx, gene_id, symbol FROM genes WHERE dataset_id = ?", params = list(ctx$dataset_id))
-  ctx$genes$lookup <- stats::setNames(g$gene_idx, g$gene_id)
-  ctx$genes$by_symbol <- stats::setNames(g$gene_idx[!is.na(g$symbol)], g$symbol[!is.na(g$symbol)])
-  invisible(NULL)
+  g <- DBI::dbGetQuery(
+    ctx$con,
+    "SELECT gene_idx, gene_id, symbol FROM genes WHERE dataset_id = ?",
+    params = list(ctx$dataset_id)
+  )
+  has_symbol <- !is.na(g$symbol)
+  list(
+    lookup = stats::setNames(g$gene_idx, g$gene_id),
+    by_symbol = stats::setNames(g$gene_idx[has_symbol], g$symbol[has_symbol])
+  )
 }
 
 #' Build the derived tables that span datasets
@@ -327,7 +354,12 @@ load_gene_lookup <- function(ctx) {
 #' @inheritParams load_dataset
 #' @return A data frame: `step`, `rows` and `seconds`.
 #' @export
-derive_cross_dataset <- function(db_path, projections = NULL, out_path = NULL, artifact_base = db_path) {
+derive_cross_dataset <- function(
+  db_path,
+  projections = NULL,
+  out_path = NULL,
+  artifact_base = db_path
+) {
   t0 <- proc.time()[["elapsed"]]
   if (is.null(projections)) {
     con <- open_stability_db(db_path)
@@ -350,7 +382,9 @@ derive_cross_dataset <- function(db_path, projections = NULL, out_path = NULL, a
       cols <- lapply(chunk, function(i) {
         file <- resolve_artifact(projections$path[i], artifact_base)
         if (!file.exists(file)) {
-          cli::cli_abort("Projection file {.file {projections$path[i]}} is missing from the database tree.")
+          cli::cli_abort(
+            "Projection file {.file {projections$path[i]}} is missing from the database tree."
+          )
         }
         encode_projection(readRDS(file), projections$path[i])
       })

@@ -96,6 +96,7 @@ on the cluster, fix what only a real cluster shows, and report honestly what wor
 
 ## Things to look at first (suspicions, not findings)
 
+- The how-to for users is `sepsisfactorsdb/vignettes/building.Rmd` (written after this handoff); correct it with what you learn on the cluster. `sbatch` needs `logs/` to exist before submission (the template now says so).
 - `script_lines` in `ingest_controller()` includes `cd "<getwd() at build time>"`: check it is right for the
   working directory the main job and workers actually use.
 - `storage = "worker"`, `retrieval = "worker"` need the `_targets` store and `part_dir` on a shared filesystem.

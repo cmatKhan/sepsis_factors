@@ -33,7 +33,10 @@ ingest_results <- function(
     stats::setNames(ids, ids),
     function(id) load_dataset(results_root, db_path, id, artifact_mode)
   )
-  derived <- lapply(stats::setNames(ids, ids), function(id) derive_dataset(results_root, db_path, id))
+  derived <- lapply(
+    stats::setNames(ids, ids),
+    function(id) derive_dataset(results_root, db_path, id)
+  )
   cross <- load_cross_dataset(results_root, db_path, artifact_mode)
   derived$cross_dataset <- derive_cross_dataset(db_path)
   invisible(list(datasets = loaded, cross_dataset = cross, derived = derived))

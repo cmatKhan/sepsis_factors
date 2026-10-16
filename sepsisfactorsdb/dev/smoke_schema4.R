@@ -1,6 +1,7 @@
 # Smoke test of the schema 4 pipeline on one legacy dataset (development only).
 # Reads results/ (read-only), writes only under results_new/smoke/.
-#   Rscript sepsisfactorsdb/dev/smoke_schema4.R [dataset,dataset,...] [output name under results_new/]
+#   Rscript sepsisfactorsdb/dev/smoke_schema4.R [dataset,dataset,...]
+#     [output name under results_new/]
 args <- commandArgs(TRUE)
 datasets <- if (length(args)) strsplit(args[1], ",")[[1]] else "GSE110487_T1"
 dataset <- datasets[1]
@@ -16,7 +17,11 @@ legacy_to_results(
   datasets = datasets, artifact_mode = "symlink"
 )
 t1 <- Sys.time()
-res <- ingest_results(file.path(out, "results"), file.path(out, "stability.sqlite"), artifact_mode = "symlink")
+res <- ingest_results(
+  file.path(out, "results"),
+  file.path(out, "stability.sqlite"),
+  artifact_mode = "symlink"
+)
 t2 <- Sys.time()
 cat("adapter seconds:", round(as.numeric(t1 - t0, units = "secs"), 1), "\n")
 cat("ingest seconds:", round(as.numeric(t2 - t1, units = "secs"), 1), "\n")

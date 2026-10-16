@@ -11,6 +11,7 @@
 # the size of the database) and a wall time that covers the whole run.
 #
 # usage, from the project root (where _targets.R and ingest.yml are):
+#   mkdir -p logs            # SLURM does not create the directory of #SBATCH --output
 #   sbatch run_ingest.sbatch
 #
 # Follow progress with `tail -f logs/ingest_main_<jobid>.out`, or from R with

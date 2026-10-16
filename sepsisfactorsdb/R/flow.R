@@ -108,16 +108,35 @@ ingest_targets <- function(
 #' @export
 use_ingest <- function(path = ".", serial = FALSE) {
   dir.create(path, recursive = TRUE, showWarnings = FALSE)
-  files <- if (serial) c("_targets.R" = "_targets_serial.R") else c("_targets.R" = "_targets.R", "ingest.yml" = "ingest.yml", "run_ingest.sbatch" = "run_ingest.sbatch")
+  files <- if (serial) {
+    c("_targets.R" = "_targets_serial.R")
+  } else {
+    c(
+      "_targets.R" = "_targets.R",
+      "ingest.yml" = "ingest.yml",
+      "run_ingest.sbatch" = "run_ingest.sbatch"
+    )
+  }
   existing <- file.path(path, names(files))[file.exists(file.path(path, names(files)))]
   if (length(existing)) {
     cli::cli_abort("{.file {existing}} already exist{?s}; not overwriting {?it/them}.")
   }
   for (i in seq_along(files)) {
-    file.copy(system.file("templates", files[[i]], package = "sepsisfactorsdb"), file.path(path, names(files)[i]))
+    file.copy(
+      system.file("templates", files[[i]], package = "sepsisfactorsdb"),
+      file.path(path, names(files)[i])
+    )
   }
-  Sys.chmod(file.path(path, "run_ingest.sbatch")[file.exists(file.path(path, "run_ingest.sbatch"))], "755")
+  Sys.chmod(
+    file.path(path, "run_ingest.sbatch")[file.exists(file.path(path, "run_ingest.sbatch"))],
+    "755"
+  )
   target <- file.path(path, "_targets.R")
-  cli::cli_inform("Wrote {.file {target}}{if (!serial) ', ingest.yml and run_ingest.sbatch'}; edit the paths, then run {.code targets::tar_make()}.")
+  cli::cli_inform(
+    paste0(
+      "Wrote {.file {target}}{if (!serial) ', ingest.yml and run_ingest.sbatch'}; edit ",
+      "the paths, then run {.code targets::tar_make()}."
+    )
+  )
   invisible(target)
 }

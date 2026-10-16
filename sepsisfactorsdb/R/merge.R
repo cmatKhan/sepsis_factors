@@ -14,25 +14,50 @@
 #'   `ref_table`).
 #' @noRd
 id_structure <- function(con) {
-  tabs <- DBI::dbGetQuery(con, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")$name
-  info <- lapply(stats::setNames(tabs, tabs), function(t) DBI::dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t)))
+  tabs <- DBI::dbGetQuery(
+    con,
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+  )$name
+  info <- lapply(
+    stats::setNames(tabs, tabs),
+    function(t) DBI::dbGetQuery(con, sprintf("PRAGMA table_info(%s)", t))
+  )
   fks <- do.call(rbind, lapply(tabs, function(t) {
     f <- DBI::dbGetQuery(con, sprintf("PRAGMA foreign_key_list(%s)", t))
     if (nrow(f)) data.frame(table = t, from = f$from, ref_table = f$table, to = f$to) else NULL
   }))
-  if (is.null(fks)) fks <- data.frame(table = character(), from = character(), ref_table = character(), to = character())
+  if (is.null(fks)) {
+    fks <- data.frame(
+      table = character(),
+      from = character(),
+      ref_table = character(),
+      to = character()
+    )
+  }
   surrogate <- lapply(info, function(i) {
     pk <- i$name[i$pk > 0]
     if (length(pk) == 1L && toupper(i$type[i$pk > 0]) == "INTEGER") pk else NULL
   })
-  is_own <- vapply(tabs, function(t) !is.null(surrogate[[t]]) && !surrogate[[t]] %in% fks$from[fks$table == t], logical(1))
+  is_own <- vapply(
+    tabs,
+    function(t) !is.null(surrogate[[t]]) && !surrogate[[t]] %in% fks$from[fks$table == t],
+    logical(1)
+  )
   surrogate[!is_own] <- list(NULL)
-  shifted <- fks[mapply(function(rt, to) is_own[[rt]] && identical(surrogate[[rt]], to), fks$ref_table, fks$to), , drop = FALSE]
+  shifted <- fks[mapply(
+    function(rt, to) is_own[[rt]] && identical(surrogate[[rt]], to),
+    fks$ref_table,
+    fks$to
+  ), , drop = FALSE]
   # order: a table after the tables it refers to
   ordered <- character()
   while (length(ordered) < length(tabs)) {
     todo <- setdiff(tabs, ordered)
-    ready <- todo[vapply(todo, function(t) all(setdiff(fks$ref_table[fks$table == t], t) %in% ordered), logical(1))]
+    ready <- todo[vapply(
+      todo,
+      function(t) all(setdiff(fks$ref_table[fks$table == t], t) %in% ordered),
+      logical(1)
+    )]
     if (!length(ready)) cli::cli_abort("The schema has a cycle of foreign keys.")
     ordered <- c(ordered, ready)
   }
@@ -51,7 +76,12 @@ id_structure <- function(con) {
 max_ids <- function(con, s) {
   stats::setNames(
     vapply(s$own, function(t) {
-      as.numeric(DBI::dbGetQuery(con, sprintf("SELECT COALESCE(MAX(%s), 0) AS m FROM main.%s", s$surrogate[[t]], t))$m)
+      as.numeric(
+        DBI::dbGetQuery(
+          con,
+          sprintf("SELECT COALESCE(MAX(%s), 0) AS m FROM main.%s", s$surrogate[[t]], t)
+        )$m
+      )
     }, numeric(1)),
     s$own
   )
@@ -95,7 +125,10 @@ merge_unit <- function(con, parts, s, renumber) {
         con,
         sprintf(
           "%s INTO main.%s (%s) SELECT %s FROM part.%s",
-          verb, t, paste(DBI::dbQuoteIdentifier(con, cols), collapse = ", "), paste(expr, collapse = ", "), t
+          verb, t, paste(DBI::dbQuoteIdentifier(con, cols), collapse = ", "), paste(
+            expr,
+            collapse = ", "
+          ), t
         )
       )
     }
@@ -155,7 +188,14 @@ merge_unit <- function(con, parts, s, renumber) {
 #'   to add the parts to, instead of a new one.
 #' @return `db_path` if given, otherwise the path of the merged file, invisibly.
 #' @export
-merge_parts <- function(part_paths, db_path = NULL, merge_dir = tempfile("merge-"), units = seq_along(part_paths), renumber = TRUE, into = NULL) {
+merge_parts <- function(
+  part_paths,
+  db_path = NULL,
+  merge_dir = tempfile("merge-"),
+  units = seq_along(part_paths),
+  renumber = TRUE,
+  into = NULL
+) {
   stopifnot(length(units) == length(part_paths))
   missing <- part_paths[!file.exists(part_paths)]
   if (length(missing)) {
@@ -241,14 +281,20 @@ check_database <- function(path) {
     cli::cli_abort(
       c(
         "{nrow(fk)} foreign key violation{?s} in {.file {path}}.",
-        "i" = "First: table {.val {fk$table[1]}}, row {fk$rowid[1]}, refers to {.val {fk$parent[1]}}."
+        "i" = paste0(
+          "First: table {.val {fk$table[1]}}, row {fk$rowid[1]}, refers to ",
+          "{.val {fk$parent[1]}}."
+        )
       ),
       class = "sepsisfactorsdb_invalid_database"
     )
   }
   ic <- DBI::dbGetQuery(con, "PRAGMA integrity_check")[[1]]
   if (!identical(ic, "ok")) {
-    cli::cli_abort(c("Integrity check of {.file {path}} failed.", "x" = "{ic[1]}"), class = "sepsisfactorsdb_invalid_database")
+    cli::cli_abort(
+      c("Integrity check of {.file {path}} failed.", "x" = "{ic[1]}"),
+      class = "sepsisfactorsdb_invalid_database"
+    )
   }
   DBI::dbExecute(con, "PRAGMA wal_checkpoint(TRUNCATE)")
   DBI::dbExecute(con, "PRAGMA journal_mode = DELETE")

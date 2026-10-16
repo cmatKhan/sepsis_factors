@@ -49,8 +49,8 @@ read_sql_statements <- function(path) {
 #' Open the stability database for writing
 #'
 #' Creates the file from `schema.sql` and `views.sql` if it is new, stamps
-#' `PRAGMA user_version` and fills the `meta` table; otherwise refuses a database whose version is not
-#' [SCHEMA_VERSION]. Sets `foreign_keys = ON`, WAL journaling,
+#' `PRAGMA user_version` and fills the `meta` table; otherwise refuses a database whose version
+#' is not [SCHEMA_VERSION]. Sets `foreign_keys = ON`, WAL journaling,
 #' `synchronous = NORMAL` and a 30 s busy timeout.
 #'
 #' @param db_path Path to the SQLite file.
@@ -105,8 +105,14 @@ open_db <- function(db_path, indexes) {
       DBI::dbDisconnect(con)
       cli::cli_abort(
         c(
-          "{.file {db_path}} has schema version {version}, but this package writes version {SCHEMA_VERSION}.",
-          "i" = "Delete the {.file .sqlite} file (keep {.file stability_artifacts/}) and load again; there are no migrations."
+          paste0(
+            "{.file {db_path}} has schema version {version}, but this package writes ",
+            "version {SCHEMA_VERSION}."
+          ),
+          "i" = paste0(
+            "Delete the {.file .sqlite} file (keep {.file stability_artifacts/}) and ",
+            "load again; there are no migrations."
+          )
         ),
         class = "sepsisfactorsdb_schema_mismatch",
         call = sys.call(-1)
@@ -122,7 +128,10 @@ open_db <- function(db_path, indexes) {
 #' @return Character vector, tables first, then views, then indexes if asked.
 #' @noRd
 schema_statements <- function(indexes = TRUE) {
-  stmts <- c(read_sql_statements(sql_path("schema.sql")), read_sql_statements(sql_path("views.sql")))
+  stmts <- c(
+    read_sql_statements(sql_path("schema.sql")),
+    read_sql_statements(sql_path("views.sql"))
+  )
   is_index <- grepl("^\\s*(--[^\n]*\n\\s*)*CREATE (UNIQUE )?INDEX", stmts)
   c(stmts[!is_index], if (indexes) stmts[is_index])
 }
@@ -132,8 +141,16 @@ schema_statements <- function(indexes = TRUE) {
 #' @param con A connection to a database made with `open_db(indexes = FALSE)`.
 #' @noRd
 create_indexes <- function(con) {
-  stmts <- c(read_sql_statements(sql_path("schema.sql")), read_sql_statements(sql_path("views.sql")))
-  for (stmt in stmts[grepl("^\\s*(--[^\n]*\n\\s*)*CREATE (UNIQUE )?INDEX", stmts)]) DBI::dbExecute(con, stmt)
+  stmts <- c(
+    read_sql_statements(sql_path("schema.sql")),
+    read_sql_statements(sql_path("views.sql"))
+  )
+  for (stmt in stmts[grepl("^\\s*(--[^\n]*\n\\s*)*CREATE (UNIQUE )?INDEX", stmts)]) {
+    DBI::dbExecute(
+      con,
+      stmt
+    )
+  }
   invisible(NULL)
 }
 

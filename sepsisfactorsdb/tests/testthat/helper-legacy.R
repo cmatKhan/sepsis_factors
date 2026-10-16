@@ -16,19 +16,32 @@ local_legacy <- function(env = parent.frame()) {
   dsets <- c("LA", "LB")
   keys <- c(LA = "pca_00000000000000a1", LB = "pca_00000000000000b1")
   DBI::dbWriteTable(con, "datasets", data.frame(
-    dataset_id = dsets, description = "d", n_samples = 5L, n_genes = 6L, sample_id_col = "sample_id",
-    feature_id_col = "feature_id", ensembl_col = "feature_id", symbol_col = "symbol", subject_id_col = NA_character_,
-    sample_metadata_source = NA_character_, feature_metadata_source = NA_character_, written_at = "2026-01-01T00:00:00Z"
+    dataset_id = dsets, description = "d", n_samples = 5L, n_genes = 6L,
+    sample_id_col = "sample_id",
+    feature_id_col = "feature_id", ensembl_col = "feature_id", symbol_col = "symbol",
+    subject_id_col = NA_character_,
+    sample_metadata_source = NA_character_, feature_metadata_source = NA_character_,
+    written_at = "2026-01-01T00:00:00Z"
   ))
-  DBI::dbWriteTable(con, "methods", data.frame(method = "pca", family = "seed_sweep", sign_ambiguous = 1L, has_loadings = 1L))
+  DBI::dbWriteTable(
+    con,
+    "methods",
+    data.frame(method = "pca", family = "seed_sweep", sign_ambiguous = 1L, has_loadings = 1L)
+  )
   DBI::dbWriteTable(con, "fits", data.frame(
-    fit_id = 1:2, fit_key = unname(keys), dataset_id = dsets, method = "pca", rank = 3L, seed = NA_integer_,
-    bootstrap = 0L, representative = 1L, mse = 0.1, n_factors = 3L, status = "ok", error = NA_character_,
+    fit_id = 1:2, fit_key = unname(keys), dataset_id = dsets, method = "pca", rank = 3L,
+    seed = NA_integer_,
+    bootstrap = 0L, representative = 1L, mse = 0.1, n_factors = 3L, status = "ok",
+    error = NA_character_,
     written_at = "2026-01-01T00:00:00Z"
   ))
   DBI::dbWriteTable(con, "factors", data.frame(
-    factor_id = 1:6, fit_id = rep(1:2, each = 3), factor_index = rep(1:3, 2), label = paste0("PC", rep(1:3, 2)),
-    n_genes = NA_integer_, stability_cosine = NA_real_, stability_pearson = NA_real_, stability_spearman = NA_real_,
+    factor_id = 1:6, fit_id = rep(1:2, each = 3), factor_index = rep(1:3, 2), label = paste0(
+      "PC",
+      rep(1:3, 2)
+    ),
+    n_genes = NA_integer_, stability_cosine = NA_real_, stability_pearson = NA_real_,
+    stability_spearman = NA_real_,
     kurtosis = NA_real_, excess_kurtosis = NA_real_
   ))
   fa <- do.call(rbind, lapply(1:2, function(i) {
@@ -63,15 +76,26 @@ local_legacy <- function(env = parent.frame()) {
     projection = matrix(1, 3, 5, dimnames = list(paste0("PC", 1:3), samples))
   ))
   DBI::dbWriteTable(con, "projections", data.frame(
-    projection_id = 1L, source_fit_id = 1L, target_dataset_id = "LB", projection_type = "cross_dataset",
+    projection_id = 1L, source_fit_id = 1L, target_dataset_id = "LB",
+    projection_type = "cross_dataset",
     include_intercept = 1L, relative_r2 = 0.5, path = pf
   ))
-  DBI::dbWriteTable(con, "time_gene_recurrence", data.frame(symbol = "G1", n_datasets = 2L, datasets = "LA,LB"))
+  DBI::dbWriteTable(
+    con,
+    "time_gene_recurrence",
+    data.frame(symbol = "G1", n_datasets = 2L, datasets = "LA,LB")
+  )
 
   dir.create(file.path(cfg, "config"))
   dir.create(file.path(cfg, "datasets", "LA"), recursive = TRUE)
   writeLines(c("FAM: [LB, LA]", "OTHER: [LZ]"), file.path(cfg, "config", "dataset_families.yml"))
-  writeLines(c("neutrophil: [AAA, BBB]", "lymphocyte: [CCC]"), file.path(cfg, "config", "composition_markers.yml"))
-  writeLines(c("dataset:", "  id: LA", "  hf_collection: \"org/coll\"   # note"), file.path(cfg, "datasets", "LA", "config.yml"))
+  writeLines(
+    c("neutrophil: [AAA, BBB]", "lymphocyte: [CCC]"),
+    file.path(cfg, "config", "composition_markers.yml")
+  )
+  writeLines(
+    c("dataset:", "  id: LA", "  hf_collection: \"org/coll\"   # note"),
+    file.path(cfg, "datasets", "LA", "config.yml")
+  )
   list(root = root, config = cfg, keys = keys)
 }

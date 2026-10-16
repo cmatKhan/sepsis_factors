@@ -1,6 +1,6 @@
 # Run with prek (https://github.com/j178/prek): `prek run --all-files`, or `prek install` to run on commit.
 #
-# The R hooks are local `language: system` hooks that call styler and lintr through Rscript, so the R
+# The R hooks are local `language: system` hooks that call styler, lintr (and pkgload, which lintr needs to see a package's own functions) through Rscript, so the R
 # packages styler and lintr must be installed in the library Rscript finds. (The hooks of the
 # lorenzwalthert/precommit repository use `language: r`, which prek does not implement yet.)
 repos:
