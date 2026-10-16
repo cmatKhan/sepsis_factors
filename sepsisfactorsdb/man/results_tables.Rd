@@ -9,7 +9,8 @@ results_tables()
 \value{
 A data frame with one row per table: its name, whether it is
 written per dataset (\code{"dataset"}) or once across datasets (\code{"cross"}),
-and its artifact-path columns (\code{NA} if none).
+its artifact-path columns (\code{NA} if none), and whether the database loads
+it (\code{loaded}).
 }
 \description{
 The results-output tables

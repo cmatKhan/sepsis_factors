@@ -11,5 +11,6 @@ RESULTS_OUTPUT_VERSION
 }
 \description{
 The version of the results-output format (see \code{\link[=validate_results]{validate_results()}}) that
-this package loads. It is read from \code{manifest.json}.
+this package loads. It is read from \code{manifest.json}. Version 2 adds only
+optional parts to version 1 (dataset family columns, \code{composition_markers}).
 }

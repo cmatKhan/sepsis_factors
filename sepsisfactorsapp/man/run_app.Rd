@@ -4,23 +4,11 @@
 \alias{run_app}
 \title{Run the latent-factor stability explorer}
 \usage{
-run_app(
-  db_path = Sys.getenv("STABILITY_DB"),
-  config_dir = Sys.getenv("SEPSISFACTORSAPP_CONFIG"),
-  ...
-)
+run_app(db_path = Sys.getenv("STABILITY_DB"), ...)
 }
 \arguments{
-\item{db_path}{Path to the SQLite file written by sepsisfactorsdb. Defaults
-to the environment variable \code{STABILITY_DB}.}
-
-\item{config_dir}{Optional directory holding \code{dataset_families.yml} (the
-timepoint order within a dataset family), \code{composition_markers.yml} (marker
-genes of the composition scores) and the per-dataset \verb{*_config.yml} files
-(for links to the documentation). Defaults to the environment variable
-\code{SEPSISFACTORSAPP_CONFIG}. Without them, the app falls back to ordering
-timepoints by the number in the dataset id and omits the marker list and
-documentation links, and says so in the console log.}
+\item{db_path}{Path to the SQLite file written by sepsisfactorsdb. Defaults to the
+environment variable \code{STABILITY_DB}.}
 
 \item{...}{Passed to \code{\link[shiny:runApp]{shiny::runApp()}} (e.g. \code{port}, \code{launch.browser}).}
 }
@@ -28,7 +16,14 @@ documentation links, and says so in the console log.}
 Does not return while the app runs.
 }
 \description{
-Opens a stability database read-only and serves the app. The app reads the
-database and its artifact files where they are: nothing is copied. Artifact
-paths in the database are relative to the database's directory.
+Opens a stability database read-only and serves the app. The database alone is
+enough. If a \verb{stability_artifacts/} folder (written with the database by
+sepsisfactorsdb) sits beside it, the pages use the full loadings, scores, projections
+and pattern-driver results from it; without it they use the reduced copies stored in
+the database and say where that limits what a page shows. Nothing is copied or
+written.
+}
+\details{
+Get the database with \code{\link[=download_db]{download_db()}}, then
+\code{run_app("db_no_rose.sqlite")}.
 }

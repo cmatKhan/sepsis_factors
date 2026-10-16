@@ -1,0 +1,293 @@
+---
+title: "Building the database"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Building the database}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+This is the how-to for turning a results output into the stability database. There are three
+ways to run it. All three give the same database, ids included.
+
+| | Function | Use it when |
+|---|---|---|
+| Sequential | `ingest_results()` | A few datasets, a laptop, or a quick check. One process, one SQLite file. |
+| Parallel, local | `ingest_parallel()` with `ingest_controller("local")` | Many datasets on one machine with several cores. |
+| Parallel, SLURM | `use_ingest()`, then `sbatch run_ingest.sbatch` | The full set of datasets. Workers are SLURM jobs. |
+
+What the database holds is in `vignette("database")`, including why the parallel build renumbers ids
+when it merges. What a results output must look like is in `vignette("results-output")`. The chunks
+below are not run when the vignette is built.
+
+## What you need
+
+* A **results output**: a directory with `manifest.json` and one folder per dataset
+  (`datasets/<id>/tables/*.parquet`, `datasets/<id>/artifacts/*.rds`), plus `cross_dataset/`.
+  `sepsisfactors` writes it. `example_results()` writes a tiny valid one for trying things out.
+* A **path for the database**, for example `out/stability.sqlite`. The artifacts the database
+  points at are placed in `stability_artifacts/` next to it, so the two travel together.
+* R >= 4.4 and `sepsisfactorsdb` installed. Installing from a checkout:
+
+```r
+devtools::install("sepsisfactorsdb")        # or: R CMD INSTALL sepsisfactorsdb
+```
+
+`validate_results()` checks a results output without writing anything. Both ways of loading run it
+first, and an unknown method, an unsupported version or a missing artifact is a clear error before
+anything is written.
+
+```r
+library(sepsisfactorsdb)
+validate_results("path/to/results")
+```
+
+### Artifact modes
+
+Whichever way you load, `artifact_mode` decides how artifact files get beside the database:
+
+| `artifact_mode` | What happens | Use it when |
+|---|---|---|
+| `"link"` (default) | Hard link; copies across filesystems | The results and the database are on one filesystem. |
+| `"symlink"` | Absolute symbolic link to the source file, which must stay where it is | The results are on another filesystem or a read-only mount, and copying would be too big. |
+| `"copy"` | Copy | You want the database tree to stand alone. |
+| `"move"` | Move out of the results | You are done with the results output. |
+
+Only the artifacts the database points at (`loadings`, `scores`, the projection and pattern-driver
+files) are placed. The derive step reads the other artifacts from the results output, so the results
+output has to stay in place while the database is built.
+
+## Sequential
+
+```r
+library(sepsisfactorsdb)
+
+ingest_results("path/to/results", "out/stability.sqlite")
+
+# only some datasets
+ingest_results("path/to/results", "out/stability.sqlite", datasets = c("GSE54514_DAY3", "GSE54514_DAY4"))
+```
+
+This validates, loads each dataset (sorted by id) with its derived tables, then the cross-dataset
+tables. Loading again replaces the rows of the datasets it loads.
+
+### Restartable, with targets
+
+To load incrementally and pick up where a failed run stopped, set up the serial targets workflow:
+
+```r
+use_ingest("run", serial = TRUE)   # writes run/_targets.R
+```
+
+Edit the paths at the top of `run/_targets.R`, then, from `run/`:
+
+```r
+targets::tar_make()
+```
+
+A dataset whose results did not change is skipped. If you delete the database file, run
+`targets::tar_invalidate(starts_with("db_"))` first so the loads run again.
+
+## Parallel, on one machine
+
+```r
+library(sepsisfactorsdb)
+
+ingest_parallel(
+  "path/to/results",
+  "out/stability.sqlite",
+  controller = ingest_controller("local"),   # workers = cores - 2 by default
+  artifact_mode = "symlink"
+)
+```
+
+Each dataset is loaded into its own SQLite part file by a worker process, large datasets are split into
+chunks (`chunk_fits`), and the parts are merged. `ingest_controller("local", workers = 4)` sets the
+number of workers. The R console is busy until the build finishes. Pass `store = "run/store"` to keep
+the targets store, so that a rerun rebuilds only the parts whose dataset changed; without it the store is
+temporary.
+
+The workers load `sepsisfactorsdb` by name, so it has to be installed (not only `load_all()`ed) in a
+library the workers can see.
+
+## Parallel, on a SLURM cluster
+
+The workflow is a targets pipeline. Its main process runs as one SLURM job; it submits the worker jobs
+through `crew.cluster`, merges the parts and publishes the database. Set it up in a project directory on
+the cluster's shared filesystem.
+
+### 1. Install the package where the workers can see it
+
+Workers start in fresh R sessions. Install `sepsisfactorsdb` and its dependencies (`crew`,
+`crew.cluster`, `targets`, `arrow`, `yaml`, `clue`, `mclust`, `DBI`, `RSQLite`, ...) into a library that
+the login node, the main job and the workers all read:
+
+```sh
+# the same lines that put R on the path in ingest.yml (setup_lines) and run_ingest.sbatch
+module load R/4.6.1
+R CMD INSTALL sepsisfactorsdb
+```
+
+### 2. Write the project files
+
+```r
+sepsisfactorsdb::use_ingest("run")
+```
+
+This writes three files into `run/`: `_targets.R` (builds the controller from `ingest.yml` and runs
+the pipeline), `ingest.yml` (all the settings) and `run_ingest.sbatch` (runs the main process as a job).
+
+### 3. Edit `ingest.yml`
+
+Paths in `ingest.yml` are relative to `run/`, which is also the working directory of the workers. Use
+absolute paths for anything outside it, and do not rely on `~` or environment variables such as
+`$TMPDIR` being expanded in these values.
+
+```yaml
+results_root: /shared/project/results           # the results output
+db_path: /shared/project/out/stability.sqlite   # the database to write
+datasets: null                                  # null = all in the manifest
+artifact_mode: symlink                          # link only if results and db share a filesystem
+part_dir: /shared/project/ingest_parts          # finished parts; must be visible to the main job
+work_dir: null                                  # where a worker builds a part; null = its temp dir
+merge_dir: null                                 # where the merge builds the database; null = temp dir
+chunk_fits: 400                                 # work above this is split into chunks
+
+controller:
+  type: slurm
+  seconds_idle: 30
+  slurm:
+    partition: null          # null = the cluster default
+    cpus_per_task: 1         # profile "default": one dataset's load, or a small chunk
+    memory_gigabytes_required: 8
+    time_minutes: 240
+    workers: 200             # most simultaneous default workers
+    setup_lines:             # shell lines every worker runs before R starts
+      - module load R/4.6.1
+      - mkdir -p /local/scratch/$USER/$SLURM_JOB_ID   # your cluster's node-local scratch path
+      - export TMPDIR=/local/scratch/$USER/$SLURM_JOB_ID
+    log_dir: logs/crew
+    big:                     # profile "big": a chunk of a large dataset
+      cpus_per_task: 2
+      memory_gigabytes_required: 32
+      time_minutes: 480
+      workers: 20
+```
+
+Points that matter:
+
+* `part_dir` and the `_targets/` store live on a **shared** filesystem: the main job merges parts that
+  workers on other nodes built.
+* **Node-local scratch.** Parts are built where `work_dir` points and moved to `part_dir` when complete.
+  `work_dir: null` uses the worker's R temporary directory, which follows the `TMPDIR` environment
+  variable, so creating a directory on the node-local scratch and exporting it in `setup_lines` (as
+  above; replace the path with your cluster's) keeps the building on node-local disk. The same applies to `merge_dir` and the main job: export `TMPDIR` in
+  `run_ingest.sbatch`.
+* **Resources are starting points**, not measured at full size. Read the real figures after a run
+  (below) and adjust: the `big` profile for the largest datasets (MARS, GSE95233, ANEMONES), the main
+  job's memory for the merge.
+* `setup_lines` must make R, and the library from step 1, available on a worker. Use the same lines in
+  `run_ingest.sbatch`.
+
+### 4. Try three small datasets first
+
+Set `datasets:` to a few small ones, for example `[GSE54514_DAY3, GSE54514_DAY4, GSE54514_DAY5]`, so a
+mistake in the setup shows up in minutes. Then set it back to `null` for the full build.
+
+### 5. Submit
+
+```sh
+cd run
+mkdir -p logs            # SLURM does not create the directory of #SBATCH --output
+sbatch run_ingest.sbatch
+```
+
+The main job asks for 2 CPUs, 64 GB and two days by default (edit the `#SBATCH` lines in
+`run_ingest.sbatch`); it only coordinates and merges, so it needs memory for the merge (about the size
+of the database) and a wall time that covers the whole run.
+
+### 6. Watch it
+
+```sh
+squeue -u $USER                          # the main job and the worker jobs
+tail -f logs/ingest_main_<jobid>.out     # the main job
+ls logs/crew/                            # worker logs
+```
+
+```r
+targets::tar_progress_summary()          # from run/, which targets are done
+targets::tar_meta(fields = c("seconds", "warnings", "error"))
+```
+
+### 7. After a run
+
+```sh
+sacct -j <jobid> --format=JobID,JobName,Elapsed,MaxRSS,State
+```
+
+shows each job's time and peak memory. Use them to size the profiles: raise `memory_gigabytes_required`
+for jobs that were killed, and lower it where `MaxRSS` is far below the request.
+
+`check_database()` confirms the foreign keys and SQLite's own integrity check are clean (the build runs
+it too and stops on a violation):
+
+```r
+sepsisfactorsdb::check_database("/shared/project/out/stability.sqlite")
+```
+
+### Restarting and rebuilding
+
+* **Rerun after a failure:** `sbatch run_ingest.sbatch` again. Finished parts are kept; only what
+  failed or is outdated is rebuilt.
+* **Results of a dataset changed:** rerun. Only that dataset's parts, then the merge, are rebuilt.
+* **Database deleted:** rerun. Only the merge and the final copy are rebuilt.
+* **Start from nothing:** `targets::tar_destroy()` in `run/` and delete `part_dir`.
+* A failed build never replaces the database: the merge is built in `merge_dir` and copied into place
+  under a temporary name only when it is complete and checked.
+
+### How to know the parallel build is right
+
+The tests build a small results output both ways and compare every table, ids included. For a real
+build, load a few datasets sequentially and in parallel and compare the two files:
+
+```r
+library(DBI)
+a <- dbConnect(RSQLite::SQLite(), "serial.sqlite", flags = RSQLite::SQLITE_RO)
+b <- dbConnect(RSQLite::SQLite(), "parallel.sqlite", flags = RSQLite::SQLITE_RO)
+tables <- setdiff(dbListTables(a), "meta")   # meta holds creation times
+vapply(tables, function(t) {
+  q <- sprintf("SELECT * FROM %s ORDER BY 1, 2", t)
+  isTRUE(all.equal(dbGetQuery(a, q), dbGetQuery(b, q)))
+}, logical(1))
+```
+
+Every value should be `TRUE`. `meta` is left out because it records when each file was created.
+
+## From the original project's output (temporary)
+
+The original project's results are a schema-3 database with a `stability_artifacts/` folder, not a
+results output. `legacy_to_results()` reshapes them so the loaders above can read them. It exists only
+until `sepsisfactors` writes the results output itself.
+
+```r
+legacy_to_results(
+  legacy_root = "path/to/legacy",                 # holds stability.sqlite and stability_artifacts/
+  out_root = "run/results",                       # must be empty or absent
+  config_dir = "path/to/sepsisfactors/inst",      # dataset families, composition markers, hf_collection
+  artifact_mode = "auto"                          # hard links on one filesystem, otherwise symlinks
+)
+```
+
+Then use any of the three ways above with `results_root = "run/results"`. The legacy database is
+opened read-only and immutable, so a read-only mount works. The conversion makes no copies of the
+artifacts unless you pass `artifact_mode = "copy"`.
+
+## What is not covered by the tests
+
+The package tests exercise the part files, the merge and the serial-versus-parallel equality without
+starting workers. Real SLURM submissions, worker start-up under your `setup_lines`, the memory profiles
+and the full 35-dataset build are checked by running them.

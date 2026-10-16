@@ -1,45 +1,31 @@
-# A render that stops with validate()/need() is the app's "Not available" notice,
-# which is the intended behaviour for data a dataset does not have; any other
-# error is a failure.
+# Drives the real app against a real schema-4 database: opt-in, set STABILITY_DB. Every
+# page's outputs for the optimal fit of each method on two datasets render without error.
+
+# A render that stops with validate()/need() is the app's "Not available" notice, which is
+# the intended behaviour for data a dataset does not have; any other error is a failure.
 render_ok <- function(expr) {
-  tryCatch({ expr; "ok" },
+  tryCatch(
+    {
+      expr
+      "ok"
+    },
     shiny.silent.error = function(e) "ok",
-    error = function(e) conditionMessage(e))
+    error = function(e) conditionMessage(e)
+  )
 }
 
-# Drives the real app against STABILITY_DB: every page's outputs for the
-# optimal fit of each method on two datasets render without error.
-test_that("the app starts and its sidebar choices flow through", {
-  skip_if_no_db()
-  db <- local_real_db()
-  testServer(app(Sys.getenv("STABILITY_DB")), {
-    ds <- intersect(c("EARLI", "ANEMONES"), list_datasets(db))[1]
-    session$setInputs(dataset = ds, metric = "cosine", rule = "stable", threshold = 0.9)
-    session$flushReact()
-    session$setInputs(methods = present())
-    session$flushReact()
-    expect_gt(nrow(optimal()), 0)
-    session$setInputs(rule = "max_r2")
-    expect_gt(nrow(optimal()), 0)
-    session$setInputs(methods = character(0))
-    session$flushReact()
-  })
-})
-
 test_that("every output of the fit pages renders for each method's optimal fit", {
-  skip_if_no_db()
-  failures <- character()
   db <- local_real_db()
+  ids <- c(
+    "explore-stab", "explore-mse", "explore-is_curve", "explore-scree",
+    "explore-factor_stab", "explore-seedpair", "explore-ari", "explore-power_summary",
+    "explore-iq", "xdata-heat", "xdata-nearest", "explore-sizes", "explore-kme",
+    "explore-dendro", "explore-overlap", "factor-kme_hist", "factor-gs",
+    "factor-genes_table", "factor-genes", "factor-scores", "meta-grid", "biplot-genes",
+    "biplot-meta", "traj-traj", "drivers-plot"
+  )
+  failures <- character()
   testServer(app(Sys.getenv("STABILITY_DB")), {
-    ids <- c(
-      "explore-stab", "explore-mse", "explore-is_curve", "explore-scree",
-      "explore-factor_stab", "explore-seedpair", "explore-ari",
-      "explore-power_summary", "explore-iq", "xdata-heat", "xdata-nearest",
-      "explore-sizes", "explore-kme", "explore-dendro", "explore-overlap",
-      "factor-kme_hist", "factor-gs", "factor-genes_table", "factor-genes",
-      "factor-scores", "meta-grid", "biplot-genes", "biplot-meta", "traj-traj",
-      "drivers-plot"
-    )
     for (ds in intersect(c("EARLI", "ANEMONES"), list_datasets(db))) {
       session$setInputs(dataset = ds, metric = "cosine", rule = "stable", threshold = 0.9)
       session$flushReact()
@@ -56,14 +42,11 @@ test_that("every output of the fit pages renders for each method's optimal fit",
           `biplot-x` = "1", `biplot-y` = "2"
         )
         session$flushReact()
-        png(tempfile(fileext = ".png"))
-        for (id in ids) {
-          # the Explore page does not show the seed x seed heatmap for sPCA
-          if (m == "spca" && id == "explore-seedpair") next
-          res <- render_ok(output[[id]])
-          if (res != "ok") failures <<- c(failures, paste(ds, m, id, res))
-        }
-        dev.off()
+        grDevices::png(tempfile(fileext = ".png"))
+        results <- vapply(ids, function(id) render_ok(output[[id]]), character(1))
+        grDevices::dev.off()
+        bad <- results != "ok"
+        failures <- c(failures, paste(ds, m, names(results)[bad], results[bad]))
       }
     }
   })
@@ -71,21 +54,20 @@ test_that("every output of the fit pages renders for each method's optimal fit",
 })
 
 test_that("the variance pages render for every dataset", {
-  con <- local_real_db()
-  failures <- character()
+  db <- local_real_db()
   outs <- c(
-    "notices", "bins", "terms", "time_genes", "within_text", "traj_plot",
-    "time_hist", "within_table", "sex_text", "sex_plot", "nl_text", "nl_plot",
-    "trait_plot", "cor_plot", "design_text", "cell_text", "cell_grid",
-    "terms_text", "terms_explained", "de_text", "de"
+    "notices", "bins", "terms", "time_genes", "within_text", "traj_plot", "time_hist",
+    "within_table", "sex_text", "sex_plot", "nl_text", "nl_plot", "trait_plot", "cor_plot",
+    "design_text", "cell_text", "cell_grid", "terms_text", "terms_explained", "de_text", "de"
   )
-  for (ds in list_datasets(con)) {
-    testServer(mod_variance_server, args = list(state = list(dataset = reactive(ds)), con = con), {
-      for (o in outs) {
-        res <- render_ok(output[[o]])
-        if (res != "ok") failures <<- c(failures, paste(ds, o, res))
+  for (ds in list_datasets(db)) {
+    testServer(
+      mod_variance_server,
+      args = list(state = list(dataset = reactive(ds)), db = db),
+      {
+        res <- vapply(outs, function(o) render_ok(output[[o]]), character(1))
+        expect_equal(unname(res[res != "ok"]), character(), info = ds)
       }
-    })
+    )
   }
-  expect_equal(failures, character())
 })

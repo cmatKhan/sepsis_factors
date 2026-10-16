@@ -6,3 +6,8 @@
 CLAUDE.local.md
 **/CLAUDE.local.md
 .DS_Store
+**.squash
+results/
+results_new/
+tools/*
+!tools/prek/

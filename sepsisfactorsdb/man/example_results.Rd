@@ -4,17 +4,21 @@
 \alias{example_results}
 \title{Write a tiny example results output}
 \usage{
-example_results(path = tempfile("results-"))
+example_results(path = tempfile("results-"), n_datasets = 2L)
 }
 \arguments{
 \item{path}{Directory to write (created; must be empty or absent).}
+
+\item{n_datasets}{2, or 3 to add \code{TOY3} (PCA and NMF) and a projection of
+\code{TOY2}'s PCA fit onto it, as the parallel build's tests need.}
 }
 \value{
 \code{path}, invisibly.
 }
 \description{
 Builds a small, valid results output for testing and for showing the
-contract: two datasets, \code{TOY1} (all six methods, pairs, ICASSO, WGCNA
-modules, enrichment, drivers, repeated-measures tables) and \code{TOY2} (PCA
-only), plus cross-dataset projections. The values are synthetic.
+contract (version 2): two datasets, \code{TOY1} (all six methods, pairs, ICASSO,
+WGCNA modules, enrichment, drivers, repeated-measures tables) and \code{TOY2}
+(PCA only), plus cross-dataset projections and composition markers. The
+values are synthetic.
 }

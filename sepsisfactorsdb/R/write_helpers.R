@@ -47,7 +47,10 @@ map_ids <- function(keys, ids, what) {
   bad <- unique(keys[is.na(out)])
   if (length(bad)) {
     cli::cli_abort(
-      "{length(bad)} {what} {cli::qty(length(bad))}key{?s} ha{?s/ve} no id in the database: {.val {utils::head(bad, 5)}}",
+      paste0(
+        "{length(bad)} {what} {cli::qty(length(bad))}key{?s} ha{?s/ve} no id in the ",
+        "database: {.val {utils::head(bad, 5)}}"
+      ),
       class = "sepsisfactorsdb_unmapped_key"
     )
   }

@@ -4,7 +4,13 @@
 \alias{load_dataset}
 \title{Load one dataset's results into the database}
 \usage{
-load_dataset(results_root, db_path, dataset_id, artifact_mode = "link")
+load_dataset(
+  results_root,
+  db_path,
+  dataset_id,
+  artifact_mode = "link",
+  artifact_base = db_path
+)
 }
 \arguments{
 \item{results_root}{The results directory.}
@@ -14,8 +20,14 @@ load_dataset(results_root, db_path, dataset_id, artifact_mode = "link")
 \item{dataset_id}{Dataset id.}
 
 \item{artifact_mode}{How artifact files get from the results into the
-database tree: \code{"link"} (hard link, copying across filesystems), \code{"copy"}
-or \code{"move"}.}
+database tree: \code{"link"} (hard link, copying across filesystems), \code{"copy"},
+\code{"move"} or \code{"symlink"} (absolute symbolic link; the results must stay
+where they are).}
+
+\item{artifact_base}{Path of the database whose directory holds
+\verb{stability_artifacts/}. It is \code{db_path} unless \code{db_path} is a part file of
+a parallel build (\code{\link[=merge_parts]{merge_parts()}}), whose artifacts belong beside the final
+database.}
 }
 \value{
 A list: \code{dataset_id}, \code{fits} (counts by status), \code{written_at}.
@@ -26,5 +38,7 @@ does both. In one transaction it upserts the dataset and its methods,
 deletes everything hanging off the dataset's fits and its dataset-level
 rows, upserts the fits on \code{fit_key} (a fit keeps its \code{fit_id}; fits no
 longer in the results are dropped), then inserts every child table,
-resolving natural keys to ids. Artifact files are placed first.
+resolving natural keys to ids. The full loadings and scores and the pattern
+driver files are placed first. The tables built from the full artifacts are
+made afterwards by \code{\link[=derive_dataset]{derive_dataset()}}.
 }

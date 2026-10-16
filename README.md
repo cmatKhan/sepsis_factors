@@ -15,7 +15,7 @@ sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 3)--
 | Run the analysis: fit PCA, sPCA, ICA, NMF, CoGAPS and WGCNA on the sepsis datasets, and compute stability, enrichment, variance and projections | [`sepsisfactors`](sepsisfactors/) |
 | Add a dataset (a config and a preprocessing script) | [`sepsisfactors`](sepsisfactors/), `use_dataset()` |
 | Request a new method | open an issue; methods are a closed set, implemented in `sepsisfactors` and `sepsisfactorsdb` |
-| Load results into the SQLite database | [`sepsisfactorsdb`](sepsisfactorsdb/) |
+| Load results into the SQLite database (sequentially, in parallel, or on SLURM) | [`sepsisfactorsdb`](sepsisfactorsdb/), `vignette("building")` |
 | Understand the results output or the database layout | [`sepsisfactorsdb`](sepsisfactorsdb/) vignettes `results-output` and `database` |
 | Explore results in the browser | [`sepsisfactorsapp`](sepsisfactorsapp/) |
 
@@ -51,8 +51,18 @@ Then, in the repository settings:
 - **Actions > General > Workflow permissions:** allow GitHub Actions to create and approve pull requests.
 - **Pages:** deploy from the `gh-pages` branch (it is created by the first documentation run).
 
-Locally, Claude Code uses your own login (subscription). Open the repository with `claude`; it offers to
-install the Posit plugins (`r-lib`, `shiny`, `posit-dev`, `quarto`) named in `.claude/settings.json`.
+Locally, Claude Code uses your own login (subscription). The agents and skills here rely on the Posit
+plugins `r-lib`, `shiny`, `posit-dev` and `quarto`, which `.claude/settings.json` enables from the
+`posit-dev/skills` marketplace. Claude Code may not prompt you to install them; check with `/plugin`, and if
+they are missing install them yourself:
+
+```sh
+claude plugin marketplace add posit-dev/skills
+claude plugin install r-lib@posit-dev-skills
+claude plugin install shiny@posit-dev-skills
+claude plugin install posit-dev@posit-dev-skills
+claude plugin install quarto@posit-dev-skills
+```
 
 ### What each label or comment does
 

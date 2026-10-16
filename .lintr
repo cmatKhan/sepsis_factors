@@ -1,6 +1,7 @@
 linters: linters_with_defaults(
     line_length_linter(100),
-    object_name_linter(styles = "snake_case")
+    # SNAKE_CASE is for constants (e.g. SCHEMA_VERSION, an exported name); everything else is snake_case.
+    object_name_linter(styles = c("snake_case", "SNAKE_CASE"))
   )
 exclusions: list(
     "tests/testthat/_snaps",

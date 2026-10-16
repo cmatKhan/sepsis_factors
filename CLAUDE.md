@@ -9,13 +9,13 @@ Three R packages for latent-factor analysis of sepsis transcriptomic time course
 another. The only coupling is two versioned contracts:
 
 ```
-sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 3)--> sepsisfactorsapp
+sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 4)--> sepsisfactorsapp
 ```
 
 | Package | Owns | Never does |
 |---|---|---|
 | `sepsisfactors` | All computation: datasets, preprocessing, fits, stability pairs, enrichment, variance partition, projections, drivers. Writes the results output. | Touch SQLite. |
-| `sepsisfactorsdb` | Validates the results output and loads it into the SQLite database and artifact layout. Specifies both contracts in its vignettes. | Compute statistics. |
+| `sepsisfactorsdb` | Validates the results output and loads it into the SQLite database and artifact layout. Specifies both contracts in its vignettes. | Compute statistics (TEMPORARY exception: the derive step, see below). |
 | `sepsisfactorsapp` | The Shiny app. Reads the database read-only, from a path the user supplies. | Copy data into the package or write to the database. |
 
 - A change to the results output or to the database layout touches **both sides**: bump
@@ -23,8 +23,14 @@ sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 3)--
   or `SCHEMA_VERSION` (the database), update `sepsisfactorsdb`'s vignettes, and say so in `NEWS.md`.
 - The method set is closed (pca, spca, ica, nmf, cogaps, wgcna). Adding a method is a developer task
   across `sepsisfactors` and `sepsisfactorsdb`. Adding a dataset is a user task (`use_dataset()`).
-- `sepsisfactorsapp` currently keeps copies of a few helpers from the other packages (listed in its
-  `TODO.md`). Do not "fix" the copies by adding a package dependency.
+- `sepsisfactorsapp` currently keeps copies of a few helpers from the other packages (listed in the root `TODO.md`,
+  section 1). Do not "fix" the copies by adding a package dependency.
+
+> **TEMPORARY exception (stage 1 of schema 4, 2026-10-16).** `sepsisfactorsdb` has a derive step
+> (`R/derive*.R`) that computes reduced and precomputed tables from the full artifacts, and a legacy
+> adapter (`R/legacy_adapter.R`) that reshapes the original project's output. Both go when `sepsisfactors`
+> writes the contract itself; the list of pieces, the packages to remove and the contract catch-up are in
+> section 7 of `TODO.md`. Do not add more statistics to `sepsisfactorsdb`.
 
 ## Working style
 
@@ -34,6 +40,25 @@ sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 3)--
   discussion rather than shipping it.
 - **No backward compatibility.** Delete legacy code rather than keep it runnable; correctness is shown
   by parity checks, not by preserving old paths.
+- **Avoid environments as mutable state, and ask first.** Do not use `new.env()`, `local()` closures that
+  keep state, `<<-`, or `assign()`/`get()`/`exists()` on an environment (as a cache, counter, accumulator or
+  lookup table) without the user's input. When you think one is useful, stop and ask about the design: say
+  what it would hold, why, and the plain alternative (functions that take their inputs and return their
+  results; computing a value once up front into a list; combining results with `lapply()`, `vapply()` or
+  `Reduce()`). In an automated run, state the proposed use and the alternative in the issue or PR and stop
+  for discussion, as for any workaround. `lintr`'s `assignment_linter` flags `<<-` and suggests assigning
+  into an environment instead; that suggestion falls under this rule, so do not apply it without asking.
+  What the references say:
+  - Advanced R, [section 10.2.4 "Stateful functions"](https://adv-r.hadley.nz/function-factories.html),
+    documents the pattern: "The super assignment operator, `<<-` rebinds an existing name found in a
+    parent environment." It also says: "Stateful functions are best used in moderation." For anything that
+    manages more than one variable, it says to switch to R6. So it is an accepted idiom, but one the book
+    tells you to use sparingly.
+  - R Packages, [chapter 6 "R code"](https://r-pkgs.org/code.html), warns against computing and caching
+    objects at build time: compute them in a function at run time instead. It does not discuss `<<-` or
+    package-level environments.
+  - No authoritative reference recommending a package-level environment
+    (`the <- new.env(parent = emptyenv())`, then `the$cache <- ...`) has been verified, so do not assume one.
 - **Explain unfamiliar methods descriptively** (what the method does, what the choice changes), and give
   a recommendation rather than a survey of options.
 - **Report outcomes faithfully**, including failing tests (with their output), skipped steps, and
@@ -51,6 +76,10 @@ sepsisfactors --results output--> sepsisfactorsdb --SQLite database (schema 3)--
   (internals get plain comments or `@noRd`); `devtools::document()` after any roxygen change.
 - testthat 3e; `tests/testthat/test-<name>.R` mirrors `R/<name>.R`; `expect_snapshot()` for errors and
   warnings; `withr` for cleanup.
+- Tests are unit tests of logic: small functions on small, direct inputs. Do not add end-to-end tests that
+  run a whole pipeline, start workers or load a full fixture database; the maintainer checks integration by
+  using the packages. At most one cheap smoke test per major entry point. Keep the whole suite fast (a
+  package's `devtools::test()` should take well under a minute single-process).
 - Messages through `cli` (`cli_abort()`, `cli_warn()`, `cli_inform()`).
 - No `library()`, `source()`, `setwd()` or working-directory-relative paths in package code; files that
   ship with a package are found with `system.file()`.

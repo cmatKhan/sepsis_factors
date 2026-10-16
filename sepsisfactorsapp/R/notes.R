@@ -1,59 +1,70 @@
-# Missing data. Anything the app expects from the database or the artifact files that
-# isn't there -- a method that hasn't been run yet, a table from an older schema, an
-# artifact file that wasn't copied -- is logged once to the console and shown as a notice.
-# It never stops the app.
-
-.notes_seen <- new.env(parent = emptyenv())
-
-app_log <- function(level, ...) {
-  message(sprintf("[stability-app %s] %s: %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), level, paste0(...)))
-}
+# Missing and reduced data. Anything the app expects from the database that is not
+# there is logged once to the console and shown as a notice; it never stops the app.
+# Data that came from the reduced copy in the database, instead of the full artifact
+# beside it, gets a "reduced data" notice that says what is reduced on that page.
 
 # Log that something expected is missing (once per message and detail).
 note_missing <- function(what, detail = NULL) {
-  key <- paste(what, detail)
-  if (is.null(.notes_seen[[key]])) {
-    .notes_seen[[key]] <- TRUE
-    app_log("missing", what, if (!is.null(detail)) paste0(" (", detail, ")"))
-  }
+  msg <- paste0("missing: ", what, if (!is.null(detail)) paste0(" (", detail, ")"))
+  cli::cli_inform(
+    c("!" = "[stability-app] {msg}"),
+    .frequency = "once",
+    .frequency_id = msg
+  )
   invisible(NULL)
 }
 
 # An inline notice for a card whose data is missing.
 missing_notice <- function(what, detail = NULL) {
-  div(class = "alert alert-warning py-2 my-2", role = "alert",
-      strong("Not available: "), what, if (!is.null(detail)) span(" ", detail))
+  div(
+    class = "alert alert-warning py-2 my-2", role = "alert",
+    strong("Not available: "), what, if (!is.null(detail)) span(" ", detail)
+  )
 }
 
-# A query that returns NULL (and logs) instead of failing, e.g. when the table is absent.
-safe_query <- function(con, sql, params = NULL, what = sql) {
-  tryCatch(DBI::dbGetQuery(con, sql, params = params),
-           error = function(e) { note_missing(what, conditionMessage(e)); NULL })
-}
-
-# Inside a render function: stop with a message (and log) when `x` is NULL or has no rows.
+# Inside a render function: stop with a message (and log) when `x` has no data.
 need_data <- function(x, what, hint = NULL) {
   if (is.null(x) || (is.data.frame(x) && nrow(x) == 0) || length(x) == 0) {
     note_missing(what, hint)
-    shiny::validate(shiny::need(FALSE, paste0("Not available: ", what, if (!is.null(hint)) paste0(" (", hint, ")"))))
+    shiny::validate(shiny::need(
+      FALSE,
+      paste0("Not available: ", what, if (!is.null(hint)) paste0(" (", hint, ")"))
+    ))
   }
   invisible(x)
 }
 
-# Open the stability DB read-only. A database in WAL mode on a read-only file system
-# (e.g. a mounted snapshot of the cluster results) can't be opened normally, because
-# SQLite wants to create its -shm file; it is then opened as an immutable snapshot, which
-# means the file must not change while the app runs.
-connect_read_only <- function(path) {
-  path <- normalizePath(path)
-  con <- tryCatch(DBI::dbConnect(RSQLite::SQLite(), path, flags = RSQLite::SQLITE_RO, synchronous = NULL),
-                  error = function(e) NULL)
-  works <- !is.null(con) && tryCatch({ DBI::dbGetQuery(con, "SELECT 1 FROM sqlite_master LIMIT 1"); TRUE },
-                                     error = function(e) FALSE)
-  if (works) return(con)
-  if (!is.null(con)) try(DBI::dbDisconnect(con), silent = TRUE)
-  app_log("note", "could not open ", path, " read-only in place; opening it as an immutable snapshot ",
-          "(restart the app after replacing the file)")
-  DBI::dbConnect(RSQLite::SQLite(), paste0("file:", path, "?immutable=1"),
-                 flags = RSQLite::SQLITE_RO, synchronous = NULL)
+# Characters the pages show, written as code points so the source stays ASCII.
+GLYPH_PLAY <- intToUtf8(0x25B6)
+GLYPH_SQ <- intToUtf8(0xB2)
+GLYPH_ARROW <- intToUtf8(0x2192)
+GLYPH_DASH <- intToUtf8(0x2014)
+GLYPH_NEWTAB <- intToUtf8(0x2197)
+
+REDUCED_HINT <- paste(
+  "The full sepsisfactors output, with the stability_artifacts/ folder beside the",
+  "database, gives the complete data."
+)
+
+# The text of a reduced-data notice: what this page lacks, then where the rest is.
+reduced_text <- function(what) {
+  paste0("Reduced data: ", what, " ", REDUCED_HINT)
+}
+
+# The notice itself, for a page that is showing the database copy.
+reduced_notice <- function(what) {
+  div(
+    class = "alert alert-info py-2 my-2", role = "note",
+    strong("Reduced data: "), what, " ", REDUCED_HINT
+  )
+}
+
+# Where a payload came from ("artifact" or "database"), kept as an attribute.
+with_source <- function(x, source) {
+  attr(x, "source") <- source
+  x
+}
+
+from_database <- function(x) {
+  identical(attr(x, "source"), "database")
 }

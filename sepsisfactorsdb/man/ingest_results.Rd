@@ -8,7 +8,7 @@ ingest_results(
   results_root,
   db_path,
   datasets = NULL,
-  artifact_mode = c("link", "copy", "move")
+  artifact_mode = c("link", "copy", "move", "symlink")
 )
 }
 \arguments{
@@ -18,15 +18,20 @@ ingest_results(
 
 \item{datasets}{Dataset ids to load; \code{NULL} for all in the manifest.}
 
-\item{artifact_mode}{\code{"link"}, \code{"copy"} or \code{"move"}; see \code{\link[=load_dataset]{load_dataset()}}.}
+\item{artifact_mode}{\code{"link"}, \code{"copy"}, \code{"move"} or \code{"symlink"}; see
+\code{\link[=load_dataset]{load_dataset()}}.}
 }
 \value{
-A list: \code{datasets} (one \code{\link[=load_dataset]{load_dataset()}} result per dataset) and
-\code{cross_dataset} (the \code{\link[=load_cross_dataset]{load_cross_dataset()}} result, or \code{NULL}).
+A list: \code{datasets} (one \code{\link[=load_dataset]{load_dataset()}} result per dataset),
+\code{cross_dataset} (the \code{\link[=load_cross_dataset]{load_cross_dataset()}} result, or \code{NULL}) and
+\code{derived} (the rows and seconds of each derive step, per dataset, and
+\code{cross_dataset}).
 }
 \description{
 Validates the results (\code{\link[=validate_results]{validate_results()}}), then loads each dataset
 (\code{\link[=load_dataset]{load_dataset()}}) and the cross-dataset tables (\code{\link[=load_cross_dataset]{load_cross_dataset()}}),
-creating the database if it is new. Nothing is computed here: every table
-is taken as it is in the results, with natural keys resolved to ids.
+creating the database if it is new. The contract tables are taken as they
+are in the results, with natural keys resolved to ids. After each load the
+derive step (\code{\link[=derive_dataset]{derive_dataset()}}, \code{\link[=derive_cross_dataset]{derive_cross_dataset()}}) builds the
+tables that let the app run from the database alone.
 }

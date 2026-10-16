@@ -1,13 +1,20 @@
-# Ingest workflow: loads a sepsisfactors results output into the stability
-# database. Run it with targets::tar_make(); a dataset whose results did not
-# change is skipped on the next run. If you delete the database file, also run
-# targets::tar_invalidate(starts_with("db_")) so the loads run again.
+# Parallel ingest workflow: loads a sepsisfactors results output into the stability
+# database. Every dataset is loaded into its own part file by a worker (local
+# processes or SLURM jobs, see `controller:` in ingest.yml), the parts are merged
+# and the result replaces the database. Run it with targets::tar_make(), or for a
+# long run sbatch run_ingest.sbatch. A dataset whose results did not change is not
+# rebuilt; a deleted database is rebuilt by the merge alone.
 library(targets)
 
-results_root <- "results" # the directory written by sepsisfactors
-db_path <- "stability/stability.sqlite"
-artifact_mode <- "link" # "link", "copy" or "move"
+config <- sepsisfactorsdb::read_ingest_config("ingest.yml")
 
-tar_option_set(packages = "sepsisfactorsdb", error = "stop")
+tar_option_set(
+  packages = "sepsisfactorsdb",
+  error = "stop",
+  controller = sepsisfactorsdb::ingest_controller(config$controller$type, config = config),
+  # Shared filesystem: workers write their parts to part_dir themselves.
+  storage = "worker",
+  retrieval = "worker"
+)
 
-sepsisfactorsdb::ingest_targets(results_root, db_path, artifact_mode = artifact_mode)
+sepsisfactorsdb::ingest_parallel_targets(config)

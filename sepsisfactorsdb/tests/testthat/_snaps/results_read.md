@@ -12,7 +12,7 @@
       validate_results(root)
     Condition
       Error in `validate_results()`:
-      ! '<tmp>' has results-output version 2, but this package loads version 1.
+      ! '<tmp>' has results-output version 3, but this package loads version 2.
       i Update sepsisfactors or sepsisfactorsdb so that the versions agree.
 
 # an unknown method is refused with a pointer to the issue tracker

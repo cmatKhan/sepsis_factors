@@ -104,5 +104,5 @@ details (how R is put on the path on the user's cluster) live in the git-ignored
 
 ## Open items
 
-See `TODO.md` (git-ignored): the NMF/CoGAPS projection asymmetry question, `gains`, controller tuning
+See the root `TODO.md` (section 6.1): the NMF/CoGAPS projection asymmetry question, `gains`, controller tuning
 and the from-scratch rerun on the cluster, and the phase 2 checks.
