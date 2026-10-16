@@ -1,0 +1,47 @@
+name: release
+
+# Merging a pull request labelled `release` into main creates one GitHub release for each package whose
+# Version it bumped (see release-check.yml): tag and title "<package>-v<version>" / "<package> <version>",
+# notes from that version's NEWS.md section. Merge with "squash" or "merge commit", not "rebase".
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: >-
+      github.event.pull_request.merged == true
+      && contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Create the releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          bumped=$(.github/scripts/bumped-packages.sh "$SHA^" "$SHA")
+          if [ -z "$bumped" ]; then
+            echo "::error::No package Version changed in $SHA."
+            exit 1
+          fi
+          while read -r pkg old new; do
+            tag="$pkg-v$new"
+            if gh release view "$tag" > /dev/null 2>&1; then
+              echo "$tag already exists; skipping"
+              continue
+            fi
+            .github/scripts/news-section.sh "$pkg" "$new" > notes.md
+            flags=()
+            # development versions (x.y.z.9000) are marked as pre-releases
+            if [[ "$new" =~ \.9[0-9]{3}$ ]]; then flags+=(--prerelease); fi
+            gh release create "$tag" --target "$SHA" --title "$pkg $new" --notes-file notes.md "${flags[@]}"
+          done <<<"$bumped"

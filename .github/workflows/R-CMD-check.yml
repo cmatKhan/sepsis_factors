@@ -1,0 +1,101 @@
+name: R-CMD-check
+
+# R CMD check (which runs the tests) for each package whose files changed. sepsisfactors is also
+# rechecked when sepsisfactorsdb changes: its end-to-end test loads the results with that package.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.pkgs.outputs.packages }}
+      workflow: ${{ steps.pkgs.outputs.workflow }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            sepsisfactors:
+              - 'sepsisfactors/**'
+              - 'sepsisfactorsdb/**'
+            sepsisfactorsdb:
+              - 'sepsisfactorsdb/**'
+            sepsisfactorsapp:
+              - 'sepsisfactorsapp/**'
+      - id: pkgs
+        env:
+          EVENT: ${{ github.event_name }}
+          SF: ${{ steps.filter.outputs.sepsisfactors }}
+          DB: ${{ steps.filter.outputs.sepsisfactorsdb }}
+          APP: ${{ steps.filter.outputs.sepsisfactorsapp }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then SF=true; DB=true; APP=true; fi
+          pkgs=()
+          [ "$SF" = true ] && pkgs+=('"sepsisfactors"')
+          [ "$DB" = true ] && pkgs+=('"sepsisfactorsdb"')
+          [ "$APP" = true ] && pkgs+=('"sepsisfactorsapp"')
+          echo "packages=[$(IFS=,; echo "${pkgs[*]}")]" >> "$GITHUB_OUTPUT"
+          echo "workflow=$([ "$SF" = true ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: changes
+    if: needs.changes.outputs.packages != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.changes.outputs.packages) }}
+    env:
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: ${{ matrix.package }}
+          extra-packages: any::rcmdcheck, any::devtools
+          needs: check
+      - name: Documentation is up to date
+        working-directory: ${{ matrix.package }}
+        run: |
+          Rscript -e 'devtools::document()'
+          git diff --exit-code -- man NAMESPACE
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          working-directory: ${{ matrix.package }}
+          upload-snapshots: true
+
+  # R CMD check copies the package away from its siblings, so sepsisfactors' end-to-end test (which
+  # loads the results into the database with the sibling sepsisfactorsdb) skips there. Run the
+  # tests inside the checkout, where the sibling exists.
+  cross-package:
+    needs: changes
+    if: needs.changes.outputs.workflow == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: >-
+            deps::./sepsisfactors,
+            deps::./sepsisfactorsdb,
+            any::devtools,
+            any::pkgload
+      - name: Test sepsisfactors with the sibling sepsisfactorsdb
+        working-directory: sepsisfactors
+        run: |
+          Rscript -e 'options(testthat.progress.max_fails = 50); devtools::test(stop_on_failure = TRUE)'

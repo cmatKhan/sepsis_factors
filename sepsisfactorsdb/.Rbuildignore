@@ -2,3 +2,7 @@
 ^\.Rproj\.user$
 ^TODO\.md$
 ^LICENSE\.md$
+^CLAUDE\.md$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$

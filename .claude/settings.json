@@ -1,0 +1,41 @@
+{
+  "extraKnownMarketplaces": {
+    "posit-dev-skills": {
+      "source": { "source": "github", "repo": "posit-dev/skills" }
+    }
+  },
+  "enabledPlugins": {
+    "r-lib@posit-dev-skills": true,
+    "shiny@posit-dev-skills": true,
+    "posit-dev@posit-dev-skills": true,
+    "quarto@posit-dev-skills": true
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash(Rscript:*)",
+      "Bash(R CMD:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(prek run:*)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm -rf:*)",
+      "Bash(gh release create:*)",
+      "Bash(gh secret:*)"
+    ]
+  }
+}

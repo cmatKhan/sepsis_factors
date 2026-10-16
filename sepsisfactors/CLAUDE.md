@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-Guidance for working in this package. It is the computation half of a three-package split:
+Guidance for working in this package (the repository-wide rules are in the root `CLAUDE.md`). It is the computation half of a three-package split:
 `sepsisfactors` (this one: fits and every analysis derived from the fits) writes a versioned results
-output; `sepsisfactorsdb` loads it into a SQLite database; `sepsisfactorsapp` (not yet ported) reads
+output; `sepsisfactorsdb` loads it into a SQLite database; `sepsisfactorsapp` reads
 that. No package imports another; the contracts are the results output (specified in
 `vignette("results-output", package = "sepsisfactorsdb")`) and the database schema. Vignettes here
 cover datasets, methods and the workflow; read the relevant one rather than relying on memory, and
@@ -22,7 +22,7 @@ keep it current when behavior changes.
 - **Docs point to code, never the reverse.** No doc paths in code strings or comments.
 - Package conventions: dependencies only through usethis (`use_package()`, `use_dev_package()`);
   base pipe; roxygen2 markdown; testthat 3e; `cli` for messages; no `library()`/`source()`/`setwd`
-  in package code; `air format .` after writing code.
+  in package code; styler and lintr (via `prek`) after writing code.
 
 ## Method outputs are developer-level
 
@@ -35,11 +35,13 @@ Behaviour that used to branch on method names is declared in each method's spec 
 representative and optimal fits, pair kind, redundancy, markers, ICASSO, projection kind, factor
 index. Do not add `method == "x"` branches to the workflow.
 
-## Running things on HTCF
+## Cluster runs
 
-- Put R on the path with `cluster.setup_lines` in `pipeline.yml` (HTCF: the spack activation in the
-  template's comments; `spack` on PATH is 1.1, the old `/ref/mblab/software/spack/bin/spack` is
-  0.17 and fails).
+Automated (CI) runs cannot run anything on the cluster; say what would need to run and stop. Site
+details (how R is put on the path on the user's cluster) live in the git-ignored `CLAUDE.local.md`.
+
+- Put R on the compute nodes' path with `cluster.setup_lines` in `pipeline.yml`; no machine paths or
+  module names in package code.
 - **Long runs go through `sbatch run_pipeline.sbatch`**, never a background tool command (those stop
   at 2 hours). The main `tar_make()` process must outlive the run: workers connect back to it.
 - Scripts that compute nodes read must live on shared storage, not `/tmp`.

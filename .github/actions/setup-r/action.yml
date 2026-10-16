@@ -1,0 +1,23 @@
+name: Set up R for the monorepo
+description: R, the dependencies of the three packages, the development tools and prek (cached).
+runs:
+  using: composite
+  steps:
+    - uses: r-lib/actions/setup-r@v2
+      with:
+        use-public-rspm: true
+    - uses: r-lib/actions/setup-r-dependencies@v2
+      with:
+        packages: >-
+          deps::./sepsisfactors,
+          deps::./sepsisfactorsdb,
+          deps::./sepsisfactorsapp,
+          any::devtools,
+          any::testthat,
+          any::styler,
+          any::lintr,
+          any::rcmdcheck,
+          any::pkgdown
+    - uses: j178/prek-action@v2.0.6
+      with:
+        install-only: true

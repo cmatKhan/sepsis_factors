@@ -24,3 +24,6 @@ Imports:
 Depends: 
     R (>= 4.4.0)
 VignetteBuilder: knitr
+URL: https://cmatkhan.github.io/sepsis_factors/sepsisfactorsdb,
+    https://github.com/cmatKhan/sepsis_factors
+BugReports: https://github.com/cmatKhan/sepsis_factors/issues

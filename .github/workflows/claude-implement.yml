@@ -1,0 +1,60 @@
+name: claude-implement
+
+# An issue labelled `auto-fix` is implemented on the branch claude/issue-<n> and opened as a pull
+# request. If a plan was agreed in the thread (see claude-plan.yml), it is followed as revised.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: claude-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    if: github.event.label.name == 'auto-fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-r
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: https://github.com/posit-dev/skills.git
+          plugins: |
+            r-lib@posit-dev-skills
+            shiny@posit-dev-skills
+            posit-dev@posit-dev-skills
+          prompt: |
+            Implement issue #${{ github.event.issue.number }} in ${{ github.repository }}.
+
+            1. Read the issue and ALL its comments (`gh issue view ${{ github.event.issue.number }} --comments`)
+               and the CLAUDE.md files. If a plan was posted and discussed in the thread, follow the latest
+               revision of it. If there is no plan, write a short one as the first comment of the pull
+               request before changing anything.
+            2. Create the branch `claude/issue-${{ github.event.issue.number }}` from the default branch.
+            3. Implement with the `r-package-dev` agent (sepsisfactors, sepsisfactorsdb) or the `shiny-dev`
+               agent (sepsisfactorsapp). Run `devtools::document()`, `devtools::test()` and
+               `devtools::check()` for each touched package, and `prek run --files <changed files>`.
+               sepsisfactors tests need the sibling sepsisfactorsdb directory, which exists here.
+            4. Run the `docs-reviewer` agent on the diff (and the `contract-reviewer` agent if the results
+               output, a method's output, or the database layout changed). Fix Blocking and Required
+               findings; list the rest in the pull request description.
+            5. Commit to the branch, push it, and open a pull request with `gh pr create` whose body says
+               what changed per package, what you ran and its real results (including failures and
+               anything you could not run), and ends with `Closes #${{ github.event.issue.number }}`.
+            Never push to or merge into the default branch. If the plan needs a workaround, or the change
+            needs a cluster run, comment on the issue and stop instead of shipping it.
+          claude_args: |
+            --max-turns 80
+            --allowedTools "Read,Grep,Glob,Edit,MultiEdit,Write,WebFetch,Task,Bash(git:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(Rscript:*),Bash(R CMD:*),Bash(prek:*),Bash(ls:*),Bash(mkdir:*),Bash(cat:*),Bash(grep:*)"
+            --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(gh pr merge:*),Bash(gh release:*),Bash(gh secret:*),Bash(rm -rf:*)"

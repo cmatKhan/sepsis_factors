@@ -28,3 +28,6 @@ Suggests:
     testthat (>= 3.0.0),
     withr
 Config/testthat/edition: 3
+URL: https://cmatkhan.github.io/sepsis_factors/sepsisfactorsapp,
+    https://github.com/cmatKhan/sepsis_factors
+BugReports: https://github.com/cmatKhan/sepsis_factors/issues

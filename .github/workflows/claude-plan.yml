@@ -1,0 +1,43 @@
+name: claude-plan
+
+# An issue labelled `plan` gets one plan comment from the `planner` agent. Nothing is edited; the plan
+# is discussed in the issue thread (see claude-respond.yml) before anything is implemented.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  id-token: write
+
+concurrency:
+  group: claude-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: github.event.label.name == 'plan'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: https://github.com/posit-dev/skills.git
+          plugins: |
+            r-lib@posit-dev-skills
+            posit-dev@posit-dev-skills
+          prompt: |
+            Use the `planner` agent to plan issue #${{ github.event.issue.number }} in ${{ github.repository }}.
+            Read the issue and its comments (`gh issue view ${{ github.event.issue.number }} --comments`),
+            the CLAUDE.md files, and the code it concerns. Write the plan following
+            `.github/claude/plan-first.md` exactly, save it to a file, and post it as ONE comment with
+            `gh issue comment ${{ github.event.issue.number }} --body-file <file>`.
+            Do not edit any file in the repository, create branches, or open pull requests.
+          claude_args: |
+            --max-turns 20
+            --allowedTools "Read,Grep,Glob,WebFetch,Task,Write(/tmp/**),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr view:*),Bash(git log:*),Bash(git diff:*)"
+            --disallowedTools "Edit,MultiEdit,NotebookEdit"

@@ -1,0 +1,45 @@
+name: release-check
+
+# A pull request labelled `release` must bump the Version of at least one package, and each bumped
+# package needs a NEWS.md heading "# <package> <version>". The release itself is created when the
+# pull request is merged (release.yml).
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The pull request bumps versions, with NEWS
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bumped=$(.github/scripts/bumped-packages.sh "$BASE" "$HEAD")
+          if [ -z "$bumped" ]; then
+            echo "::error::This pull request has the release label but changes no package Version."
+            exit 1
+          fi
+          status=0
+          while read -r pkg old new; do
+            echo "$pkg: ${old:-none} -> $new"
+            if [ -n "$old" ] && [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | tail -n1)" != "$new" ]; then
+              echo "::error::$pkg version went from $old to $new, which is not an increase."
+              status=1
+            fi
+            .github/scripts/news-section.sh "$pkg" "$new" "$HEAD" > /dev/null || {
+              echo "::error::$pkg NEWS.md needs a heading '# $pkg $new'."
+              status=1
+            }
+          done <<<"$bumped"
+          exit $status

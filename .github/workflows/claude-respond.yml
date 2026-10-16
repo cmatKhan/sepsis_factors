@@ -1,0 +1,81 @@
+name: claude-respond
+
+# `@claude` in a comment.
+#  - on an issue: revise the plan (comment only, nothing is edited);
+#  - on a pull request (comment, review comment, or review): make the requested changes on the PR branch.
+# Start a review comment with `@claude` for it to be picked up. Only users with write access can trigger
+# the action (its default), and the action ignores comments written by bots.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: claude-respond-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  issue-plan:
+    if: >-
+      github.event_name == 'issue_comment'
+      && !github.event.issue.pull_request
+      && github.event.comment.user.type != 'Bot'
+      && contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: https://github.com/posit-dev/skills.git
+          plugins: |
+            r-lib@posit-dev-skills
+            posit-dev@posit-dev-skills
+          claude_args: |
+            --max-turns 20
+            --append-system-prompt "This is a discussion on an issue. Use the planner agent to revise the plan according to the comment, following .github/claude/plan-first.md, and give the full revised plan. Do not edit files, create branches, or open pull requests. Answer questions directly. If the maintainer asks you to implement, tell them to add the auto-fix label."
+            --allowedTools "Read,Grep,Glob,WebFetch,Task,Bash(gh issue view:*),Bash(git log:*),Bash(git diff:*)"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit"
+
+  pr-work:
+    if: >-
+      (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.comment.user.type != 'Bot'
+        && contains(github.event.comment.body, '@claude'))
+      || (github.event_name == 'pull_request_review_comment'
+        && github.event.comment.user.type != 'Bot'
+        && contains(github.event.comment.body, '@claude'))
+      || (github.event_name == 'pull_request_review'
+        && github.event.review.user.type != 'Bot'
+        && contains(github.event.review.body, '@claude'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-r
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: https://github.com/posit-dev/skills.git
+          plugins: |
+            r-lib@posit-dev-skills
+            shiny@posit-dev-skills
+            posit-dev@posit-dev-skills
+          claude_args: |
+            --max-turns 60
+            --append-system-prompt "You are addressing review feedback on a pull request. Read the whole review thread and CLAUDE.md. Make exactly the requested changes on the PR branch with the r-package-dev or shiny-dev agent, rerun document/test/check for the touched packages and `prek run --files <changed files>`, run the docs-reviewer agent on the new diff, commit and push to the PR branch, and reply with what you changed and the real results of what you ran. If a request is unclear or needs a workaround or a cluster run, ask in a reply instead of guessing. Never push to the default branch or merge."
+            --allowedTools "Read,Grep,Glob,Edit,MultiEdit,Write,WebFetch,Task,Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(Rscript:*),Bash(R CMD:*),Bash(prek:*),Bash(ls:*),Bash(mkdir:*),Bash(cat:*),Bash(grep:*)"
+            --disallowedTools "Bash(git push --force:*),Bash(git push -f:*),Bash(gh pr merge:*),Bash(gh release:*),Bash(gh secret:*),Bash(rm -rf:*)"

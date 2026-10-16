@@ -1,0 +1,36 @@
+# Run with prek (https://github.com/j178/prek): `prek run --all-files`, or `prek install` to run on commit.
+#
+# The R hooks are local `language: system` hooks that call styler and lintr through Rscript, so the R
+# packages styler and lintr must be installed in the library Rscript finds. (The hooks of the
+# lorenzwalthert/precommit repository use `language: r`, which prek does not implement yet.)
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '(\.Rd|\.md)$|/_snaps/'
+      - id: end-of-file-fixer
+        exclude: '\.Rd$|/_snaps/'
+      - id: check-yaml
+      - id: check-added-large-files
+  - repo: local
+    hooks:
+      - id: parsable-R
+        name: parsable-R
+        language: system
+        entry: Rscript tools/prek/parse-files.R
+        files: '\.[rR]$'
+      - id: style-files
+        name: style-files (styler)
+        language: system
+        entry: Rscript tools/prek/style-files.R
+        files: '\.([rR]|[rR]md|qmd)$'
+        exclude: '^(.*/)?(renv/|_snaps/)'
+      # Non-blocking until the baseline is clean; then drop --warn-only. Configured by .lintr.
+      - id: lintr
+        name: lintr
+        language: system
+        entry: Rscript tools/prek/lint-files.R --warn-only
+        files: '\.([rR]|[rR]md|qmd)$'
+        exclude: '^(.*/)?(renv/|_snaps/)'
+        verbose: true

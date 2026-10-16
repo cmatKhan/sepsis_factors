@@ -3,3 +3,7 @@
 ^TODO\.md$
 ^CLAUDE\.md$
 ^LICENSE\.md$
+^CLAUDE\.local\.md$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$

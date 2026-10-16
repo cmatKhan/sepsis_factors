@@ -53,3 +53,6 @@ Remotes:
     cmatKhan/projectR@feature-add_center_by_loadings,
     linxihui/NNLM
 VignetteBuilder: knitr
+URL: https://cmatkhan.github.io/sepsis_factors/sepsisfactors,
+    https://github.com/cmatKhan/sepsis_factors
+BugReports: https://github.com/cmatKhan/sepsis_factors/issues

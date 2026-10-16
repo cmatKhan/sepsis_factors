@@ -1,3 +1,7 @@
 ^sepsisfactorsapp\.Rproj$
 ^\.Rproj\.user$
 ^TODO\.md$
+^CLAUDE\.md$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$

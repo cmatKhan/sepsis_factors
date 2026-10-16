@@ -1,0 +1,8 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.claude/settings.local.json
+CLAUDE.local.md
+**/CLAUDE.local.md
+.DS_Store
