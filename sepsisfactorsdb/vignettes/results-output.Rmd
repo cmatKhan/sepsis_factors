@@ -1,0 +1,179 @@
+---
+title: "The results output"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{The results output}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+```{r setup}
+library(sepsisfactorsdb)
+```
+
+## What this is
+
+`sepsisfactorsdb` loads **already computed** results into a database; it computes nothing. The
+results arrive as a *results output*: a directory of Parquet tables and `.rds` artifacts written
+by the `sepsisfactors` package. This page is the specification of that directory. It is the
+contract between the two packages, which do not import each other. Each side checks a version
+and fails with a clear message if the other is out of date.
+
+Two version numbers decide whether a results output can be loaded:
+
+- `RESULTS_OUTPUT_VERSION` (`r RESULTS_OUTPUT_VERSION`), written to `manifest.json` as
+  `results_output_version`. It changes when the layout or a table's columns change.
+- A `method_output_version` per method, also in the manifest. It changes when what a method
+  writes changes. `supported_methods()` lists the versions this package can load.
+
+The method set is closed. Adding a method, or changing what an existing one writes, is a developer
+task: open an issue. It adds an entry to the package's table of supported method outputs, and the
+loader refuses a results output containing a method or version it does not know.
+
+## Layout
+
+```
+<results_root>/
+  manifest.json
+  datasets/<dataset_id>/
+    tables/<table>.parquet      dataset-level and fit-level tables
+    artifacts/<file>.rds        every artifact file the tables reference
+  cross_dataset/
+    tables/<table>.parquet      projections, gene_space_agreement, time_gene_recurrence
+    artifacts/<file>.rds        projection results
+```
+
+`manifest.json` holds `results_output_version`, `writer` (package and version), `created_at`,
+`datasets` (the ids present) and `methods` (a `method_output_version` for every method present).
+
+```{r example}
+results <- example_results()
+jsonlite::toJSON(read_manifest(results), auto_unbox = TRUE, pretty = TRUE)
+```
+
+## Tables
+
+There is one Parquet file per database table that a dataset (or the cross-dataset step) fills. A
+table's columns are the database table's columns (`vignette("database")`) with two changes:
+
+- **Surrogate ids are replaced by natural keys.** The database assigns integer ids at load time, so
+  the results carry the keys the ids stand for: a fit is its `fit_key`, a factor is
+  (`fit_key`, `factor_index`), a fit pair is (`fit_a_key`, `fit_b_key`), and so on. The pair of fits
+  in `fit_pairs` and `factor_matches` may be given in either order; the loader stores `fit_a < fit_b`
+  by id and swaps the matched factors and counts with it.
+- **Load-time timestamps are optional.** `written_at`, `computed_at`, `queried_at` and `fitted_at`
+  are filled with the load time when the file lacks them.
+
+Columns holding an artifact path (listed below) contain only the **file name**, relative to the
+`artifacts/` directory next to `tables/`. The loader stores
+`stability_artifacts/<dataset_id>/<file name>`. A projection's file lives in
+`cross_dataset/artifacts/` and is stored under its source fit's dataset.
+
+Every `dataset_id` column must hold the dataset's own id. `datasets`, `methods` and `fits` are
+required for every dataset; the other tables are present when the dataset has rows for them.
+Failed fits are allowed: they keep their rank and error text, may have `fit_metrics` rows, and have
+no artifacts.
+
+`contract_columns()` returns the exact columns, so the tables below cannot drift from the code:
+
+```{r tables, echo = FALSE}
+tabs <- results_tables()
+tabs$columns <- vapply(tabs$table, function(t) paste(contract_columns(t), collapse = ", "), "")
+tabs$paths <- ifelse(is.na(tabs$paths), "", tabs$paths)
+knitr::kable(
+  tabs[, c("table", "scope", "paths", "columns")],
+  col.names = c("Table", "Scope", "Path column", "Columns")
+)
+```
+
+Loader-filled timestamp columns, per table:
+
+```{r filled, echo = FALSE}
+filled <- vapply(
+  tabs$table,
+  function(t) paste(setdiff(contract_columns(t, TRUE), contract_columns(t)), collapse = ", "),
+  ""
+)
+knitr::kable(data.frame(table = tabs$table, optional = filled)[filled != "", ], row.names = FALSE)
+```
+
+## Artifacts
+
+Plain R objects only (no S4 objects), so reading them needs no package to be loaded. Per fit:
+`loadings` (genes x factors), `scores` (samples x factors), `diag`, `raw`, `dendrogram`,
+`redundancy` and `kme`. Per dataset: `matrix`, `sample_metadata`, `feature_metadata`,
+`variance_partition`, `de_results`, `composition`, `enrichment_genes` and `pattern_markers`.
+`projections.path`, `pattern_drivers.path` and `icasso_clusters.dendro_file` point to further
+files. The artifact kinds are constrained by the database schema.
+
+Sample and feature metadata are plain data frames (no Arrow-backed columns).
+
+## Method outputs
+
+What each method must provide, at `method_output_version` 1. The loader checks that the `methods`
+row agrees, that every `ok` fit has the artifacts below, and that the required tables exist.
+
+```{r methods, echo = FALSE}
+spec <- sepsisfactorsdb:::SUPPORTED_METHOD_OUTPUTS
+knitr::kable(data.frame(
+  method = names(spec),
+  family = vapply(spec, function(x) x$family, ""),
+  sign_ambiguous = vapply(spec, function(x) x$sign_ambiguous, TRUE),
+  has_loadings = vapply(spec, function(x) x$has_loadings, TRUE),
+  fit_artifacts = vapply(spec, function(x) paste(x$fit_artifacts, collapse = ", "), ""),
+  tables = vapply(spec, function(x) paste(x$tables, collapse = ", "), ""),
+  row.names = NULL
+))
+```
+
+Beyond the checks, each method has conventions that readers rely on:
+
+- **pca.** One fit, at the maximum rank; smaller ranks are the first components of it. `diag` holds
+  `sdev` (the full spectrum), `center` (named by gene, the same ids as the loadings) and
+  `mse_by_rank`. There are no pairs, since there is one fit.
+- **spca.** Both grid stages are in `fits`; each fit has a `para` parameter and `mse` is `NA`.
+  `fit_metrics` hold `pev_sparse`, `iterations`, `converged` and the Index-of-Sparseness metrics
+  (`pev_pca`, `prop_sparse`, `index_of_sparseness`, `is_selected`, `hit_max_iter`, `at_scan_edge`). A
+  fit stopped at its time limit is `failed`, its `error` starts with `killed_not_converged`, and it has
+  `fit_metrics` rows but no loadings.
+- **ica.** Seed sweep plus bootstrap fits (`bootstrap = 1`). Each (rank, seed, bootstrap) is an
+  independent fit: components are not nested across ranks and their order and sign are arbitrary, so
+  fits are compared only through matching and ICASSO. Bootstrap fits have no `scores` artifact, are
+  not representative, and take part in pairs and ICASSO. `icasso_clusters` and `icasso_membership`
+  are populated; `diag` carries the kurtosis.
+- **nmf.** Seed sweep; `diag` carries the NMF diagnostics; scores are the transposed H.
+- **cogaps.** Seed sweep; scores are the sample factors; pattern markers are in the dataset's
+  `pattern_markers` artifact.
+- **wgcna.** No loadings. Scores are the module eigengenes with columns named `ME<id>`;
+  `factor_index` is the module id. `rank`, `seed` and `mse` are `NA`. `gene_modules`,
+  `module_kme_summary`, `module_kme_histograms`, `wgcna_sft` and `gene_significance` are populated, and
+  `fit_metrics` hold `n_blocks`, `n_unassigned`, `scale_free_r2` and `mean_k`. A dendrogram exists only
+  when the network was built in one block.
+
+## Loading
+
+`ingest_results()` validates (`validate_results()`), then loads each dataset (`load_dataset()`) and
+the cross-dataset tables (`load_cross_dataset()`):
+
+```{r load}
+db <- file.path(tempfile("db-"), "stability.sqlite")
+res <- suppressMessages(ingest_results(results, db))
+res$datasets$TOY1$fits
+```
+
+A results output that fails validation is rejected before anything is written. The errors carry a
+class: `sepsisfactorsdb_invalid_results`, `sepsisfactorsdb_results_version`,
+`sepsisfactorsdb_unsupported_method`.
+
+```{r invalid, error = TRUE}
+unlink(file.path(results, "datasets", "TOY1", "tables", "gene_modules.parquet"))
+validate_results(results)
+```
+
+Artifact files are placed into `<db dir>/stability_artifacts/<dataset_id>/` by hard link (the
+default, copying across filesystems), copy or move (`artifact_mode`). The results output is never
+modified, except that `"move"` takes its files.

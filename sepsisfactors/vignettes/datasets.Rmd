@@ -1,0 +1,163 @@
+---
+title: "Datasets and their configs"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Datasets and their configs}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+## Data root
+
+The raw data, except for ROSE (dbGaP), is the
+[HuggingFace sepsis collection](https://huggingface.co/collections/cmatkhan/sepsis-transcriptomics).
+`download_collection(dest)` downloads it into `dest/<dataset>/`; make `dest` the data root, by
+setting `data_root` in `pipeline.yml`, the `SEPSIS_DATA_ROOT` environment variable or the
+`sepsisfactors.data_root` option (`default_data_root()`; the option wins). The dataset configs
+give data paths relative to the data root.
+
+## Datasets built into the package, and your own
+
+Each dataset is a folder `<ID>/` with a `config.yml` and, usually, a `preprocess.R` that builds
+its matrix. The folders of the 35 known datasets are built into the package
+(`discover_datasets()`); a project's own `datasets/` folder adds datasets and replaces built-in
+ones of the same id. A dataset's id is the `dataset.id` its config declares and must equal its
+folder name. Subsets analysed separately (for example one timepoint) are separate datasets, each
+with its own config; there is no "several matrices in one config".
+
+`vignette("datasets")` is this page; `vignette("dataset-notes")` records what each dataset is and
+what to know before trusting it. The package's templates hold a fully commented example config
+(`system.file("templates", "dataset_metadata.example.yml", package = "sepsisfactors")`).
+
+### Adding a dataset
+
+A dataset is three parquet files in one directory under the data root, a config, and its id in
+`pipeline.yml`. The files are named by the config's `*_path` keys (conventionally
+`<dataset>/expression.parquet`, `feature_metadata.parquet` and `sample_metadata.parquet`).
+Extra columns are ignored.
+
+| File | One row per | Columns the config names |
+|---|---|---|
+| `expression.parquet` | feature x sample (long format) | `feature_id_col`, `sample_id_col`, `value_col`. Defaults `feature_id`, `sample_id`, `value`. Counts for RNA-seq, log-scale values for arrays: the workflow normalizes nothing by itself. |
+| `feature_metadata.parquet` | feature | `feature_id_col`: unique, and the same ids as the expression file's features. `ensembl_col`: Ensembl gene id (a `;`-separated list takes its first gene); every comparison across datasets goes through it. `symbol_col`: gene symbol; display only, except that arrays with a `design:` block are collapsed to one probe per symbol. |
+| `sample_metadata.parquet` | sample | `sample_id_col`: the same ids as the expression file's samples. Plus every column a `design:` block names (subject, time, group, covariates), and `subject_id_col` if you set it. |
+
+The sample metadata file is optional: without it (for example SHIP-TREND) the dataset gets
+factor fits but no design, variance or composition analysis.
+
+1. Put the three files under `<data root>/<dataset>/`.
+2. `use_dataset("<dataset>")` writes `datasets/<dataset>/config.yml` and `preprocess.R` from a
+   template. Edit the config: the three paths (relative to the data root), the column names above,
+   a `methods:` block, and a `design:` block if you want the repeated-measures analysis.
+3. Add the id to `datasets:` in `pipeline.yml`.
+4. Run the workflow. Only the new dataset's targets are built.
+
+Every key of the `dataset:`, `design:` and `methods:` blocks is documented in the comments of the
+example config; each method's keys are also in `vignette("methods")`. The notes below cover the
+parts that are easy to miss.
+
+### The `design:` block
+
+Optional. A dataset with one gets the repeated-measures analysis (`vignette("methods")`).
+`group_at_first_time: true` is for a group that changes over time (GSE13904's "SIRS resolved"):
+every sample takes its subject's first-timepoint group. Per-timepoint subsets have no `design:`
+block: their factors are described with their parent's design (`variance_parent()`).
+
+**Composition markers.** `composition_markers.yml` lists the neutrophil and lymphocyte marker
+genes behind the per-sample composition scores (`analyze_composition()`). A project's own copy
+next to `pipeline.yml` replaces the package's. Editing it reruns only the composition targets and
+what reads them.
+
+### YAML keys that are booleans
+
+R's `yaml` package reads an **unquoted** key that is a YAML 1.1 boolean token -- `y`, `n`, `yes`,
+`no`, `on`, `off`, `true`, `false`, in any capitalization -- as `TRUE`/`FALSE`, not the string you
+wrote. A method argument literally named `n` silently becomes the key `FALSE`.
+`read_dataset_metadata()` errors on a `TRUE`/`FALSE` key under `methods:`; quote such keys
+(`"n": [...]`).
+
+## Building a matrix
+
+The pipeline never assumes a normalization or metadata values. `load_input_matrix()` builds the matrix one of three ways, first match wins:
+
+| # | Config | Behavior |
+|---|---|---|
+| 1 | `dataset.matrix_path` | reads that RDS matrix as-is |
+| 2 | `dataset.preprocessing_script` | runs your script against the raw parquet trio |
+| 3 | neither | pivots `expression_path` wide -- no normalization, no filtering |
+
+Every built-in dataset has a `preprocess.R` in its folder, run by `run_preprocessing_script()`.
+The result must be a plain matrix with row names = feature ids and column names = sample ids.
+Any sample or gene filtering belongs in the script (or the prebuilt matrix).
+
+### Preprocessing-script contract
+
+The script is `source()`d with these variables already defined:
+
+| Variable | From |
+|---|---|
+| `expression_path`, `sample_metadata_path`, `feature_metadata_path` | `dataset.*_path` |
+| `sample_id_col`, `feature_id_col`, `value_col`, `ensembl_col` | `dataset.*_col` |
+| `tmp_dir` | a directory created for this run |
+
+It must write its feature x sample matrix to `file.path(tmp_dir, "matrix.rds")`. Scripts use
+whatever packages they need (they call `library()` themselves), and hold no machine paths. To also
+run one by hand, define the path variables first and guard the save on `tmp_dir`, which only
+exists when the workflow sources the script:
+
+```r
+framework_run <- exists("tmp_dir", inherits = FALSE)
+# ... your logic ...
+if (framework_run) saveRDS(final_mat, file.path(tmp_dir, "matrix.rds"))
+```
+
+The one transform the pipeline applies itself is the non-negativity shift NMF and CoGAPS
+need (`shift_nonneg()`, the `mat_nn_<dataset>` target): an algorithm requirement, not a
+normalization choice.
+
+## Dataset families
+
+`dataset_families.yml` lists which datasets are timepoints or subsets of the same
+cohort (e.g. `ANEMONES` and `ANEMONES_DAY1`...`ANEMONES_DISCHARGE`). It decides two things:
+
+- **projectR intercept:** projections within a family leave out the intercept; projections
+  across families include it.
+- **Gene-space agreement** is computed between datasets in the same family only.
+
+Families are listed explicitly, not inferred from dataset-id naming.
+
+## Gene identifiers across datasets
+
+Each dataset's matrix keeps its platform's own feature ids (Illumina/Affymetrix probes,
+Entrez ids, versioned Ensembl ids). Anything that compares datasets or gene sets -- enrichment
+and projectR -- first remaps row names to **version-stripped Ensembl gene ids**
+(`ENSG00000001234.2` → `ENSG00000001234`) with `build_ensembl_map()`/`remap_to_ensembl()`, using `dataset.ensembl_col`; a `;`-separated multi-gene
+entry takes its first gene. The map (`ensembl_map_<dataset>`) is built once per dataset from
+its feature metadata and its matrix, and is one-to-one: where several of the matrix's probes map
+to one gene, only the one with the highest mean expression across the dataset's samples is
+kept. A gene is then the same probe in the matrix, in every fit's loadings and in every gene
+list, and converting is a rename. (Before 2026-10-15 duplicates were collapsed separately in
+each matrix, taking each column's largest |value|, which could mix probes across samples and
+across factors; 684 of the 35 matrices' 257,544 rows were in such groups, mostly ANEMONES and
+GSE95233.) ANEMONES maps poorly: only about 4,200 of its 8,000 rows have an Ensembl id, so the
+rest take no part in cross-dataset comparisons.
+
+Gene **symbols** (`build_symbol_map()`, `dataset.symbol_col`) are for display only, never for
+matching: symbols are ambiguous and renamed across annotation releases.
+
+A dataset with a missing or wrong `ensembl_col` keeps its native ids, so it matches almost
+nothing in other datasets. That shows up not as an error but as near-zero `n_genes_matched`
+in `projections` (projectR logs "0 row names matched").
+
+## Which datasets are built
+
+`pipeline.yml` lists the 35 datasets the pipeline builds: 12 full datasets (11 with a
+`design:` block; SHIP-TREND has no sample metadata) and 23 per-timepoint subsets. One config
+is left out:
+
+| Dataset | Why |
+|---|---|
+| `gains` | the package source is an unfinished stub: it reads the four sub-cohort expression files (E-MTAB-4421/4451/5273/5274) but never builds a matrix. Whether to pool the four accessions is still undecided. |
+
+SHIP-TREND (991 healthy samples) has no sample metadata (its phenotype data is
+access-restricted): it gets factor fits but no design, variance or composition analysis.

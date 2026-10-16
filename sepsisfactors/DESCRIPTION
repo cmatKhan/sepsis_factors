@@ -1,0 +1,55 @@
+Package: sepsisfactors
+Title: What the Package Does (One Line, Title Case)
+Version: 0.0.0.9000
+Authors@R: 
+    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
+Description: What the package does (one paragraph).
+License: MIT + file LICENSE
+Config/roxygen2/version: 8.1.0
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Suggests: 
+    callr,
+    CoGAPS,
+    DBI,
+    elasticnet,
+    fastICA,
+    knitr,
+    NNLM (>= 0.4.4),
+    pkgload,
+    rmarkdown,
+    RSQLite,
+    testthat,
+    WGCNA,
+    withr
+Config/testthat/edition: 3
+Depends: 
+    R (>= 4.4.0)
+Imports: 
+    arrow,
+    BiocParallel,
+    cli,
+    clue,
+    crew,
+    crew.cluster,
+    dplyr,
+    edgeR,
+    fgsea,
+    ggplot2,
+    jsonlite,
+    limma,
+    lme4,
+    matrixStats,
+    mclust,
+    msigdbr,
+    projectR (>= 1.24.0),
+    ragg,
+    rlang,
+    targets,
+    tidyr,
+    variancePartition,
+    yaml
+Remotes: 
+    cmatKhan/projectR@feature-add_center_by_loadings,
+    linxihui/NNLM
+VignetteBuilder: knitr

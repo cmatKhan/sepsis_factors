@@ -1,0 +1,266 @@
+---
+title: "Running the workflow"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Running the workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+## Running the workflow
+
+`use_pipeline("my_project")` writes `_targets.R`, `pipeline.yml` and `run_pipeline.sbatch`. Edit
+`pipeline.yml` (the datasets, the data root, the cluster setup lines and the controller profiles),
+then run from that directory. The main process -- `tar_make()` -- coordinates: it submits SLURM
+worker jobs through crew.cluster and must stay alive until they finish, because workers connect
+back to it.
+
+**As a batch job** (anything long, e.g. a full build):
+
+```sh
+sbatch run_pipeline.sbatch                                      # everything outdated
+sbatch run_pipeline.sbatch 'tidyselect::starts_with("fit_")'    # fits only (no extraction)
+sbatch run_pipeline.sbatch 'tidyselect::starts_with("results_")'  # rewrite the results tables from stored results
+tail -f logs/targets_main_<jobid>.out
+```
+
+The argument is passed to `tar_make(names = ...)`. targets builds the named targets plus whatever
+they depend on, and nothing else, so a part of the workflow can run without the long fits. For
+example, the repeated-measures analysis alone for every dataset:
+
+```sh
+sbatch run_pipeline.sbatch 'c(starts_with("design_"), starts_with("expr_"), starts_with("norm_"),
+  starts_with("vp_"), starts_with("dream_"), starts_with("de_tables_"), starts_with("dupcor_"),
+  starts_with("composition_"), starts_with("controls_"), starts_with("control_factor_"),
+  any_of("variance_explore"))'
+```
+
+Check `tar_outdated(names = ...)` with the same selection first: it lists exactly what would build.
+
+**From an interactive R session** in the project directory:
+
+```r
+library(targets)
+tar_visnetwork()                            # the graph, outdated targets highlighted
+tar_outdated()                              # what tar_make() would rebuild
+tar_make()                                  # build everything outdated
+tar_make(names = starts_with("fit_pca_"))   # a subset
+tar_progress_summary()                      # progress while a run is going
+```
+
+An interactive session ends with its job, so long runs belong in `run_pipeline.sbatch`.
+
+**Reading results:** `tar_read(fit_pca_EARLI)` returns a target's value. `read_method_fits("EARLI",
+"spca")` returns a method's fits as one `list(params, result)` per grid row, both sPCA stages
+included.
+
+**The results output** is what the workflow produces for `sepsisfactorsdb`: Parquet tables and
+`.rds` artifacts under `results_root` (default `results/`). Load it into the database with
+`sepsisfactorsdb::ingest_results()`; its specification is
+`vignette("results-output", package = "sepsisfactorsdb")`.
+
+## Targets per dataset
+
+`tar_dataset_fits()` and `tar_dataset_ingest()` build these targets for each dataset `<key>` (the
+dataset id, made safe for a name):
+
+| Stage | Targets |
+|---|---|
+| inputs | `inputs_<key>` (file target over the config, preprocessing script and raw data), `meta_<key>`, `mat_<key>`, `mat_nn_<key>`, `sample_meta_<key>`, `subjects_<key>` (each matrix column's subject, `fit_subjects()`) |
+| fits, per method `<m>` | `grid_<m>_<key>`, `fit_<m>_<key>` (one branch per batch of grid rows); sPCA adds `grid_spca_refine_<key>`, `fit_spca_refine_<key>`, `selection_spca_<key>` |
+| extraction, per method | `ingest_<m>_<key>`, `pairs_<m>_<key>`, `representatives_<m>_<key>`, `redundancy_<m>_<key>`, `fgsea_jobs_<m>_<key>`/`fgsea_<m>_<key>`, `icasso_ica_<key>`, `factor_vp_<m>_<key>` (score-level variance partition, when the dataset or its parent has a design) |
+| repeated measures (datasets with a `design:` block) | `design_<key>`, `expr_<key>`, `norm_<key>`, `vp_<key>`, `dream_<key>`, `de_tables_<key>` (every contrast's table; the only reader of the dream fit), `dupcor_<key>` (time courses), `controls_<key>` (arrays with `control_probes`), `control_factor_<key>` (with `control_probes: {covariate: true}`), `composition_<key>`, `vp_explore_<key>`, `vp_summary_<key>`, `vp_qc_<key>` (plots and tables in `<results_root>/qc/variance/<dataset>/`), `variance_files_<key>` |
+| WGCNA | `wgcna_ora_jobs_`/`wgcna_ora_<key>`, `wgcna_fit_jobs_`/`wgcna_fit_diag_<key>`, `wgcna_dataset_diag_<key>` |
+| per dataset | `metadata_files_<key>`, `matrix_file_<key>`, `matrix_diagnostics_<key>`, `ensembl_map_<key>`, `enrichment_<key>`, `factor_gene_files_<key>`, `drivers_<key>`, `results_<key>` (the dataset's tables in the results output) |
+| across datasets | `projectr_jobs_<key>`/`projectr_<key>`, `projection_scores_<key>`, `gene_space_<key>`, `results_cross_dataset`, `results_manifest`, `variance_explore`, plus `msigdb_pathways`, `ensembl_maps`, `matrix_files`, `dataset_families`, `composition_markers` |
+
+## What reruns when
+
+targets reruns a target when its command or its inputs change. The workflow's functions live in
+this package, and targets does not track the code of an installed package, so **upgrading the
+package does not rerun anything by itself**. After an upgrade that changes a computation,
+invalidate what you want recomputed, for example `tar_invalidate(starts_with("fit_nmf_"))`, or
+track the package's functions by adding `imports = "sepsisfactors"` to `tar_option_set()` in
+`_targets.R` (then any change in a function a target calls reruns it, including the fits of a
+method: sPCA takes about a day).
+
+| Change | Reruns |
+|---|---|
+| a dataset's config, preprocessing script or raw files | that dataset only |
+| a method's grid in one config (for example adding a rank) | only the new grid rows' fits, then that dataset's extraction |
+| a controller's `batch_size` or `cpus_per_task` | that method's fits (they change the grid) |
+| a controller's memory, time or worker settings | nothing |
+| a dataset's `design:` block | that dataset's repeated-measures targets and score-level partitions, then its results tables -- never a fit |
+| `composition_markers.yml`, `dataset_families.yml` | the composition targets (families: the projections) and what reads them |
+
+Stopping a run keeps every finished branch. Removing a dataset from `pipeline.yml` leaves its
+results in the store (`targets::tar_prune()` deletes them).
+
+## SLURM resources
+
+Each method has a crew controller under `controllers:` in `pipeline.yml`: memory, CPUs,
+wall time, idle timeout, `batch_size`, `tasks_max`. Ingestion, enrichment (`fgsea`), projections
+(`projectr`) and matrix building (`prep`) have their own. Each controller grows its pool of
+worker jobs with the backlog and shrinks it when work runs out; a worker is one SLURM job that
+runs tasks until it's idle or reaches its time limits.
+
+- **No worker caps by default.** SLURM's scheduler and per-user limits (200 running jobs per
+  user on HTCF) decide what runs when; a controller without `workers:` is effectively uncapped.
+  PCA, NMF and ICA keep small caps for efficiency: their tasks take seconds, much less than a
+  worker's ~30 s R start-up, so one worker per task would mostly be start-up.
+- **Batches.** Each branch costs the main process about a second of bookkeeping, so fast
+  methods group grid rows into branches (`batch_size`), and projections run one branch per
+  (source, target) dataset pair.
+- **Backups for out-of-memory.** A controller's `backup:` block (crew backup controllers)
+  retries a task whose worker crashed `crashes_max` times -- typically killed for exceeding
+  memory on the largest datasets -- on `<name>_backup` with more memory.
+- **One fit per worker for long fits.** sPCA and the `vp` controller (variancePartition and
+  dream, BiocParallel `MulticoreParam` over `cpus_per_task`) use `tasks_max: 1`, so no long task
+  starts late in a worker's life.
+
+### Main-process memory
+
+The main process's memory scales with the number of tasks it has handed to crew and not yet
+collected, not with the data:
+
+- **Every ready task is pushed at once.** targets pushes a ready target to its controller unless
+  the controller is *saturated* (crew's `saturated()`: tasks pushed ≥ `workers`); a saturated
+  controller's targets wait in targets' own backlog as names. Without a `workers:` cap a
+  controller never saturates, so every ready task is pushed immediately, including the ones
+  waiting in SLURM's queue behind the 200-running-jobs limit.
+- **Each pushed task carries the globals.** When the workflow's functions were sourced from scripts
+  the payload was the target plus every object and function defined, about 5.3 MB serialized
+  (2026-10-14), mostly source references. They are now package functions, which workers load
+  by name, so tasks should be much smaller; this has not been measured.
+- **It's held in the main process.** mirai's dispatcher is a thread in the main R process
+  (mirai ≥ 2.7), so each outstanding task costs about twice its payload, ~10.6 MB.
+
+The full run's opening burst (2026-10-14: about 1,400 tasks, mostly CoGAPS, WGCNA and sPCA, as
+every dataset's grids became ready together) took the main process to 14.75 GB within two
+minutes, and 16.8 GB after twenty. That burst crashed a run with `--mem=16G`; `run_pipeline.sbatch` requests more, and
+up to about 20 GB is acceptable on HTCF. The script also writes
+`logs/targets_main_<jobid>_mem.tsv` (the job's memory, each process's RSS and the number of
+worker jobs, every 30 s).
+
+If it becomes a problem, shrink the payload rather than cap workers (a cap below the cluster's
+running limit leaves capacity unused when one controller has the remaining work).
+
+### Expected resource use
+
+Measured on the full runs of 2026-10-14/15 (35 datasets, 19-991 samples; matrices are capped at
+8,000 genes, most have 7,000-8,000). Each dataset is one observation: times are fitted as
+`log(seconds) ~ log(samples) + log(genes) [+ log(rank)] [+ para]`, so the exponents below say how
+a step scales. Memory is the SLURM peak (MaxRSS) of worker jobs that did work, or the task's own
+cgroup record on the `vp` controller. 
+**Factor fits.** Time is per fit; "at 8,000 genes" columns are predictions from the fitted model.
+
+| Method | Fits (run) | Scaling of time (exponent; R²) | Per fit, 200 samples | Per fit, 1,000 samples | Peak memory | CPU use |
+|---|---|---|---|---|---|---|
+| sPCA | 1,260 (889 CPU-h) | genes^2.6, K^1.0, ×2.2 per +0.1 para, samples^0.2; R² 0.94 | at 100 samples: K 5 8-77 min (para 0.2-0.5), K 12 19-191 min | K 5: 12-123 min; K 12: 31-306 min | 1.5-3.0 GB, flat in samples (genes^1.4) | 1 core, ~100% |
+| CoGAPS | 600 (30 CPU-h) | genes^1.1, samples^0.7, rank^0.6; R² 0.75 | 5-7 min | 14-20 min | 9.8-10.3 GB, flat (distributed over 10 sets) | 10 cores, ~88% |
+| NMF | 1,600 (2 CPU-h) | genes^0.9, rank^1.6, samples^0.3; R² 0.82 | 2-15 s | 2-23 s | 0.3 GB | 1 core, ~89% |
+| WGCNA | 525 (5 CPU-h) | genes^0.9, flat in samples; R² 0.73 | ~35 s | ~40 s | 2.5-2.8 GB (genes × genes adjacency/TOM, so bounded by the 8,000-gene cap) | 2 cores, ~44% (mostly single-threaded) |
+| ICA | 3,500 (0.3 CPU-h) | samples^1.4, genes^0.9; R² 0.94 | < 1 s | ~4 s | 0.4-0.9 GB (exceeds 0.5 GB on the larger datasets) | 1 core |
+| PCA | 35 | samples^1.3, genes^1.2 | < 1 s | ~1 s | 0.4-0.55 GB | 1 core |
+
+sPCA dominates: a dataset's sPCA costs a median 20 CPU-h (largest 87 CPU-h). Per-fit time barely
+depends on the number of samples, because `spca()` works on the gene × gene covariance: genes and
+the sparsity `para` drive it. Fits at high K and para on the largest datasets reach the 8 h cap
+(4 fits on 2026-10-14: ANEMONES K 10 para 0.55; MARS K 8-12 para 0.40-0.45), so a run's wall time
+is about two 8-hour stages (scan, then refine) for the slowest dataset, not the total CPU-hours.
+
+**Repeated-measures module** (`vp` controller, 8 cores; cgroup records):
+
+| Step | Time | Memory | Scales with |
+|---|---|---|---|
+| `vp_` (variancePartition) | 1-3 min typical; 13 min for ANEMONES | 2.4-4.1 GB | model genes^2.1 (CPU), not samples (samples^0.2); ~90% of 8 cores |
+| `dream_` | time courses 2-13 min (ANEMONES largest); cross-sectional datasets ~10 s | 3.7-7.5 GB time courses, 0.6-0.9 GB cross-sectional | model genes (^3.7), and whether there is a subject random effect |
+| `norm_` (RNA-seq voom weights) | ≤ 1 min | 3-3.7 GB | |
+| `dupcor_`, `factor_vp_*`, composition, QC | ≤ 8 min, mostly < 1 min | < 2 GB | |
+
+"Model genes" are the genes after collapsing probes or `filterByExpr()` (6,700-32,000), not the
+8,000-gene factor matrix.
+
+**Ingestion and cross-dataset steps.**
+
+| Step | Time | Memory | Notes |
+|---|---|---|---|
+| `fgsea_` (enrichment, per representative fit) | until 2026-10-15 (8 cores): branch median 2 min, max 16 min. Of one fit's serial time, `collapsePathways()` (the `is_main_pathway` flag) is ~54% and `fgsea()` ~45%, GO:BP alone ~56%; ORA ~1%. Since 2026-10-15 every GSEA call runs in one parallel round and every ORA call in a second, one task per call, largest collections first (`run_fgsea_job()`): ~2× faster on 3 cores | 2.6-3.9 GB, flat in dataset size | was ~2.5 of 8 cores (four sequential rounds, fixed chunks); now requested 3 |
+| `wgcna_ora_` | ~0.1-3 min | 0.3-3.7 GB | |
+| `projectr_` (per source × target dataset) | until 2026-10-15: branch median 2 min, max 112 min, 193 CPU-h in total, almost all of it converting the target matrix's gene ids once per fit (150 s each onto MARS; projectR itself 0.4 s). Now the target is converted once per branch with a one-to-one map: expect seconds per branch | 1.2-2.1 GB | was fits × target samples; now dominated by reading the target matrix |
+| `projection_scores_` | ~12 min per source dataset | | |
+| `drivers_` (pattern drivers) | median 3 min, up to 65 min | within the `ingest` request | |
+| `ingest_`, `pairs_`, `redundancy_`, `factor_vp_` | seconds to 2 min | ≤ 2.3 GB | |
+| `results_<dataset>` | writing Parquet tables: seconds | | the database load is `sepsisfactorsdb`'s (about 75 min serially for 35 datasets, 2026-10-15) |
+
+**Whole runs.** Main process (`tar_make()`): 12-17.7 GB peak (see "Main-process memory").
+Without sPCA the full pipeline took 1 h 20 min (2026-10-14); with sPCA 12.5 h, nearly all of
+it the two sPCA stages of the largest datasets. A rebuild of only the DB and projections takes
+about 1-1.5 h (the projectR branches).
+
+### Tuning
+
+Aim for about 75% average memory and CPU use, never below 50%, and err on the high side. Size
+memory for the largest dataset (SHIP-TREND: 8,000 genes × 991 samples), not EARLI.
+
+1. Run the method, e.g. `tar_make(names = starts_with("fit_nmf_"))`.
+2. Find the worker array ids: `sacct -X -S <start> --format=JobID,JobName | grep crew-worker`.
+3. Check usage with `seff <jobid>`, or for an array
+   `python seff-array.py <array id>` (the seff-array script). seff-array needs a
+   terminal; from a non-interactive shell wrap it:
+   `script -qc "stty cols 100; python seff-array.py <id>" /dev/null`.
+
+**The `vp` controller also records its own use:** `norm_`, `vp_` and `dream_` store their job's
+cgroup peak memory and CPU seconds in their result (`$resources`, `job_resources()`), and `vp_summary_<key>` reports them. That was needed when these tasks
+used socket (`SnowParam`) workers, which left the job's process tree so `seff` missed them;
+since 2026-10-14 they use forked (`MulticoreParam`) workers, which use no ports. `seff` still
+misses them: on the 2026-10-14/15 runs SLURM reported a median CPU efficiency of 0.02 for `vp`
+jobs, while the cgroup records show about 90% of 8 cores (e.g. `vp_ANEMONES`: 5,829 CPU-seconds
+in 795 s). Use `$resources` for this controller.
+
+The current values and the measurements behind them are in the template `pipeline.yml`'s comments.
+
+## Running on a scheduler other than SLURM
+
+The workflow has only run on SLURM (HTCF). The targets themselves don't depend on that: they
+only name a controller (`tar_resources_crew(controller = "prep")`), so the logic is the same on
+any crew backend. Things tied to SLURM, which a port would change:
+
+1. **Controller construction.** `build_controller_group()` is the only place controllers are
+   built, and it calls `crew.cluster::crew_controller_slurm()` with `crew_options_slurm()`. The
+   other [crew.cluster](https://wlandau.github.io/crew.cluster/) schedulers (SGE, PBS, LSF) have
+   their own controller and options functions, and `crew::crew_controller_local()` runs everything
+   on one machine.
+2. **The `controllers:` block.** Its fields map onto SLURM: `time_minutes` is the job's `--time`
+   (and sets the soft wall time, `seconds_wall`), `memory_gigabytes_required` and `cpus_per_task`
+   are the job's resources, and `partition` (under `cluster:`) is the SLURM partition.
+3. **The worker environment.** `worker_script_lines()` runs the config's `cluster.setup_lines`
+   (whatever puts R on each worker's path) and changes into the project directory.
+4. **Starting the run.** `run_pipeline.sbatch` is a SLURM script that runs the `tar_make()` main
+   process. Any way of keeping that process alive for the whole run works, because the workers
+   connect back to it.
+5. **Resource recording.** `job_resources()` reads the job's cgroup (v2) under
+   `slurmstepd.scope`, using `SLURM_JOB_ID`. Outside SLURM, or without cgroup v2, it returns no
+   usable measurement; the `vp` tasks' `$resources` would be empty.
+6. **Names.** The method registries' `resource_defaults()` take an argument called `slurm_cfg`
+   (only `cpus_per_task` is read from it).
+
+## Logs and monitoring
+
+| What | Where |
+|---|---|
+| main process | `logs/targets_main_<jobid>.out` |
+| main-process memory | `logs/targets_main_<jobid>_mem.tsv` (every 30 s) |
+| workers | `logs/crew/<controller>_<jobid>.out` |
+| per-target errors and warnings | `tar_meta(fields = c(error, warnings))` |
+| progress | `tar_progress_summary()`, `tar_poll()` |
+
+A failed fit doesn't fail its branch: it's recorded with `status = 'failed'` and its error in
+the DB. A target that does error is skipped along with what depends on it, and the rest of the
+run continues (`error = "continue"`).
+
+## Loading the results into a database
+
+The results output is loaded by `sepsisfactorsdb::ingest_results()` (or its targets workflow,
+`use_ingest()`); see that package's vignettes. Nothing in this workflow reruns for a reload.
+

@@ -1,0 +1,26 @@
+Package: sepsisfactorsdb
+Title: What the Package Does (One Line, Title Case)
+Version: 0.0.0.9000
+Authors@R: 
+    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
+Description: What the package does (one paragraph).
+License: MIT + file LICENSE
+Config/roxygen2/version: 8.1.0
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Suggests: 
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0),
+    withr
+Config/testthat/edition: 3
+Imports: 
+    arrow,
+    cli,
+    DBI,
+    jsonlite,
+    RSQLite,
+    targets
+Depends: 
+    R (>= 4.4.0)
+VignetteBuilder: knitr

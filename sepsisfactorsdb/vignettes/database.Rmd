@@ -1,0 +1,708 @@
+---
+title: "The database: schema and artifacts"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{The database: schema and artifacts}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Overview
+
+`sepsisfactorsdb` writes a SQLite database and, next to it, a `stability_artifacts/` directory.
+Bulky results -- loadings, scores, diagnostics, raw model objects, projections -- are `.rds` files
+under `stability_artifacts/<dataset_id>/`, referenced from the tables by paths relative to the
+database's directory, so the two move together. This is the contract between `sepsisfactorsdb`
+(which writes it) and its readers, such as the Shiny app.
+
+**It is a derived output.** Every row is loaded from a results output
+(`vignette("results-output")`) by `ingest_results()`; nothing is edited by hand and there are no
+migrations.
+
+**Schema versioning.** The schema is `schema.sql` and `views.sql`, installed with the package.
+`open_stability_db()` creates them on a new file and stamps `PRAGMA user_version` with
+`SCHEMA_VERSION`; it refuses a database with a different version. The package version never decides
+whether a database can be opened: only the schema version does, and it changes only when the layout
+does. A reader holds its own copy of the version it supports and should check
+`PRAGMA user_version` before reading.
+
+After a schema change, bump `SCHEMA_VERSION` (and the results-output version if the results change
+with it), delete the `.sqlite` file only, and load again. Keep `stability_artifacts/`: it is rebuilt
+by loading, but only for files the results provide.
+
+**Reading it.** Open read-only from R with
+`DBI::dbConnect(RSQLite::SQLite(), path, flags = RSQLite::SQLITE_RO)`, or `sqlite3 -readonly`.
+Whole-table scans of a multi-gigabyte file over a network filesystem are slow; copy it to
+node-local disk for heavy queries.
+
+```{r example}
+library(sepsisfactorsdb)
+results <- example_results()
+db <- file.path(tempfile("db-"), "stability.sqlite")
+invisible(suppressMessages(ingest_results(results, db)))
+con <- DBI::dbConnect(RSQLite::SQLite(), db, flags = RSQLite::SQLITE_RO)
+DBI::dbGetQuery(con, "SELECT method, COUNT(*) AS n_fits FROM fits GROUP BY method")
+DBI::dbDisconnect(con)
+```
+
+### Design notes
+
+- **Stability without every cell.** For each pair of fits of a method, factors are matched 1-to-1
+  (Hungarian algorithm on loadings cosine; on |cosine| for methods whose factors can flip sign).
+  Rather than store every factor x factor similarity, the database keeps the matches plus context
+  to judge them: each match's runner-up and margin, statistics of the unmatched similarities per
+  fit pair, and pooled histograms.
+- **WGCNA kME in context.** For each gene, its correlation with its own module's eigengene (kME),
+  its best competing module, an analytic p-value, and an empirical p-value against a permutation
+  null (each eigengene's samples shuffled 100 times), with member / non-member / permutation
+  summaries and histograms per module. The full genes x modules kME matrix is an artifact.
+- **Everything computed is kept,** including tables a reader may not use yet.
+- **Method-specific values in long tables** (`fit_params`, `fit_metrics`, `fit_artifacts`) rather
+  than per-method columns.
+- **Bulky lists are artifacts:** the enrichment gene lists and the pattern markers are per-dataset
+  artifacts (`enrichment_genes`, `pattern_markers`).
+
+## Conventions
+
+- **Engine:** SQLite. Column types are SQLite storage classes: `INTEGER`, `REAL`, `TEXT`.
+- **Booleans** are `INTEGER` with `CHECK (x IN (0,1))`.
+- **Timestamps** are `TEXT` in ISO-8601 UTC (e.g. `2026-10-05T16:13:15Z`).
+- **Connection pragmas** set by `open_stability_db()`: `foreign_keys = ON`, `journal_mode = WAL`,
+  `synchronous = NORMAL`, `busy_timeout = 30000`.
+- **Ids.** `fit_id`, `factor_id`, `fit_pair_id`, `match_id`, `query_id`, `projection_id` and
+  `driver_id` are integers assigned at load time. The results carry natural keys (`fit_key`,
+  `factor_index`, ...) and the loader resolves them. `fit_id` is stable across loads, because fits
+  are upserted on `fit_key`; the other ids are not.
+- **Update semantics.**
+  - `datasets` and `fits` are upserted. `fits` is matched on `fit_key`, so a fit keeps its `fit_id`.
+  - All child rows of a dataset are deleted and inserted again on each load.
+  - Fits whose `fit_key` is gone from the results are deleted, and `ON DELETE CASCADE` removes
+    their dependents.
+  - The cross-dataset tables are replaced as a whole after every dataset is loaded, and artifact
+    files no row references are removed from the database's `stability_artifacts/` (never from the
+    results output).
+- **Abbreviations below:** `PK` primary key, `FK -> t.c` foreign key, `CASCADE` = `ON DELETE
+  CASCADE`, `UQ` part of a UNIQUE constraint, `NN` NOT NULL, `IDX` indexed.
+
+## Dataset-level tables
+
+### `datasets`
+One row per dataset (one input matrix and config, e.g. `EARLI`, `ANEMONES_DAY1`). It is the root
+of every cascade. Its metadata columns record how to interpret the sample/feature metadata files,
+which is what `dataset_metadata_sources` used to hold.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK |
+| description | TEXT | |
+| n_samples | INTEGER | NN; columns of the analysed matrix |
+| n_genes | INTEGER | NN; rows of the analysed matrix |
+| sample_id_col | TEXT | |
+| feature_id_col | TEXT | |
+| ensembl_col | TEXT | |
+| symbol_col | TEXT | |
+| subject_id_col | TEXT | |
+| sample_metadata_source | TEXT | original parquet path (provenance) |
+| feature_metadata_source | TEXT | original parquet path (provenance) |
+| written_at | TEXT | NN |
+
+### `dataset_artifacts`
+Paths, relative to the DB directory, of the files cached for a dataset. `kind` is the file name
+without `.rds`.
+
+| kind | Contents |
+|---|---|
+|  matrix | the analysed (factor-analysis) matrix |
+|  sample_metadata, feature_metadata | the metadata as base-R data frames (read back without arrow) |
+|  variance_partition | per-gene variance fractions, absolute variances, fit flags (singular, collinearity), the gene table and `explore_variance()`'s per-gene summary (categories, repeatability, factor-analysis-gene flag) |
+|  de_results | every dream contrast and joint test as a full topTable (logFC, t, z.std, F, F.std, p-values) |
+|  composition | `analyze_composition()` whole: per-sample traits, markers, PCs, correlations, trait variance partition, sex check |
+|  enrichment_genes | each enrichment result's overlap or leading-edge genes (fit_key, factor_index, query_type, direction, term_id, genes as JSON) |
+|  pattern_markers | each representative fit's marker genes and scores (fit_key, factor_index, gene, score) |
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK (with kind); FK -> datasets.dataset_id CASCADE |
+| kind | TEXT | PK (with dataset_id); CHECK IN the kinds above |
+| path | TEXT | NN |
+
+### `matrix_diagnostics`
+One row of sanity statistics per dataset for the analysed matrix: scale, skew/kurtosis,
+conditioning and so on.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK; FK -> datasets.dataset_id CASCADE |
+| val_min | REAL | |
+| val_max | REAL | |
+| val_mean | REAL | |
+| val_sd | REAL | |
+| skew_p50 | REAL | median per-gene skewness |
+| skew_p95 | REAL | 95th percentile per-gene skewness |
+| kurtosis_p50 | REAL | median per-gene kurtosis |
+| kurtosis_p95 | REAL | 95th percentile per-gene kurtosis |
+| min_singular_value | REAL | |
+| max_singular_value | REAL | |
+| condition_number | REAL | |
+| max_sample_cor | REAL | largest off-diagonal sample–sample correlation (duplicate check) |
+| computed_at | TEXT | NN |
+
+*(`n_genes` and `n_samples` moved to `datasets`.)*
+
+## Method and fit tables
+
+### `methods`
+One row per method. It holds the method properties that queries filter on (family, whether
+factors can flip sign, whether the method has loadings).
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| method | TEXT | PK |
+| family | TEXT | NN; CHECK IN ('seed_sweep','param_grid') |
+| sign_ambiguous | INTEGER | NN; boolean |
+| has_loadings | INTEGER | NN; boolean (0 for WGCNA) |
+
+### `fits`
+One row per fitted model, i.e. one row of a method's parameter grid for one dataset. Failed fits
+are recorded too, with `status = 'failed'` and the error message.
+
+- `fit_key` is `<method>_<hash>`, the hash covering the dataset id, the method and the fit's
+  parameters, excluding resource settings. It is the stable identity shared with the artifact
+  file names, and it is unique across datasets.
+- `fit_id` is the compact integer used in joins.
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_id | INTEGER | PK |
+| fit_key | TEXT | NN; UNIQUE |
+| dataset_id | TEXT | NN; FK -> datasets.dataset_id CASCADE; IDX (dataset_id, method, rank) |
+| method | TEXT | NN; FK -> methods.method |
+| rank | INTEGER | number of factors requested (NULL for WGCNA) |
+| seed | INTEGER | NULL for deterministic methods |
+| bootstrap | INTEGER | NN; DEFAULT 0; boolean (ICA ICASSO resamples) |
+| representative | INTEGER | NN; DEFAULT 0; boolean |
+| mse | REAL | reconstruction MSE on the method's input matrix; NULL if not defined (sPCA) |
+| n_factors | INTEGER | realized factors (WGCNA: non-zero modules) |
+| status | TEXT | NN; CHECK IN ('ok','failed') |
+| error | TEXT | error message when status = 'failed' (including "killed_not_converged" for sPCA fits stopped at `max_hours`) |
+| written_at | TEXT | NN |
+
+### `fit_params`
+Every parameter of a fit's grid row as a long table, replacing the overloaded `alpha` column and
+the parameters dropped by the current schema. Examples: sPCA `para`, `lambda`; WGCNA `power`,
+`minModuleSize`, `networkType`; ICA `alpha`; CoGAPS `nIterations`. Resource settings
+(`n.threads`, `nThreads`, `nSets`) are excluded.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_id | INTEGER | PK (with name); FK -> fits.fit_id CASCADE |
+| name | TEXT | PK (with fit_id); the tool's own argument name |
+| num_value | REAL | set when the value is numeric |
+| text_value | TEXT | set when the value is character/logical |
+
+### `fit_metrics`
+Method-specific scalar results for a fit:
+- every method: `fit_seconds` (fit wall time).
+- sPCA: `pev_sparse`, `iterations` (last value spca()'s trace printed, within 10), `converged`
+  (0 when `max.iter` was reached or the fit was stopped at `max_hours`), plus `pev_pca`,
+  `prop_sparse`, `index_of_sparseness`, `is_selected`, `hit_max_iter` and `at_scan_edge` from the
+  Index-of-Sparseness table.
+- NMF: `n_iteration`, `target_loss`, `average_epochs`, `run_seconds`.
+- CoGAPS: `mean_chisq`.
+- ICA: `orthonormality_residual` (‖W Wᵀ − I‖), `prewhiten_var_retained`.
+- WGCNA: `n_blocks` (1 when the network was built in one block), `n_unassigned`,
+  `scale_free_r2` and `mean_k` (scale-free fit and mean connectivity at the fit's power).
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_id | INTEGER | PK (with name); FK -> fits.fit_id CASCADE |
+| name | TEXT | PK (with fit_id) |
+| value | REAL | |
+
+### `fit_artifacts`
+Paths, relative to the DB directory, of the per-fit files that hold the bulky results. Replaces
+the nine `*_file` columns on `fits`.
+
+| kind | Contents | Methods |
+|---|---|---|
+| loadings | genes × factors matrix | all except WGCNA |
+| scores | samples × factors (WGCNA: eigengenes) | all |
+| diag | method diagnostics list (PCA `sdev`/`center`/`mse_by_rank`; sPCA `pev`/`var_all`/`n_nonzero`/`center`/`trace` + the rest of `spca()`'s output; ICA `W`/`K`/`A`/`S` (rows named by sample)/prewhitening rotation/`boot_idx`/`boot_subjects`; CoGAPS SD matrices; NMF traces; WGCNA per-gene `connectivity`, `scale_free`, `gsg`) | per method |
+| raw | full native result object | CoGAPS (`CogapsResult`), WGCNA (`blockwiseModules()` output) |
+| dendrogram | the gene tree the modules were cut from (`net$dendrograms[[1]]`; hclust pieces) | WGCNA (single block) |
+| redundancy | K × K within-fit cosine matrix | nmf, cogaps, spca, ica (representatives) |
+| kme | full genes × modules kME matrix | WGCNA |
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_id | INTEGER | PK (with kind); FK -> fits.fit_id CASCADE |
+| kind | TEXT | PK (with fit_id); CHECK IN ('loadings','scores','diag','raw','dendrogram','redundancy','kme') |
+| path | TEXT | NN |
+
+### `factors`
+One row per latent factor of a fit: a component or pattern, or for WGCNA a non-zero module.
+
+- Per-factor stability is the median matched |similarity| across same-rank fit pairs, per metric.
+- ICA kurtosis lives here, replacing `ica_component_kurtosis`.
+
+| Column | Type | Attributes |
+|---|---|---|
+| factor_id | INTEGER | PK |
+| fit_id | INTEGER | NN; FK -> fits.fit_id CASCADE; UQ (fit_id, factor_index) |
+| factor_index | INTEGER | NN; column position (WGCNA: module number) |
+| label | TEXT | display label (e.g. `PC3`, `Pattern_2`, `ME5`) |
+| n_genes | INTEGER | genes in the WGCNA module / sPCA non-zero loadings; NULL otherwise |
+| stability_cosine | REAL | |
+| stability_pearson | REAL | |
+| stability_spearman | REAL | |
+| kurtosis | REAL | ICA only |
+| excess_kurtosis | REAL | ICA only |
+
+## Pair-stability tables
+
+Stability compares every pair of fits of one method within a dataset (all seeds, all ranks).
+
+- Factor methods use Hungarian matching on loadings cosine (on |cosine| for sign-ambiguous
+  methods). WGCNA matches modules by gene Jaccard.
+- Instead of storing every factor × factor cell, the DB stores the matches plus enough
+  unmatched-cell context (runner-up, null stats, histograms) to judge each match.
+- Statistics over unmatched cells use |value|.
+
+### `fit_pairs`
+One row per compared pair of fits of the same method and dataset, stored once with
+`fit_a < fit_b`.
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_pair_id | INTEGER | PK |
+| fit_a | INTEGER | NN; FK -> fits.fit_id CASCADE; UQ (fit_a, fit_b) |
+| fit_b | INTEGER | NN; FK -> fits.fit_id CASCADE; IDX; CHECK (fit_a < fit_b) |
+| same_rank | INTEGER | NN; boolean |
+| n_factors_a | INTEGER | NN |
+| n_factors_b | INTEGER | NN |
+| ari | REAL | WGCNA only: adjusted Rand index of the module assignments |
+
+### `factor_matches`
+One row per Hungarian-matched factor pair within a fit pair: min(n_factors_a, n_factors_b) rows
+per fit pair.
+
+| Column | Type | Attributes |
+|---|---|---|
+| match_id | INTEGER | PK |
+| fit_pair_id | INTEGER | NN; FK -> fit_pairs.fit_pair_id CASCADE; UQ (fit_pair_id, factor_a) |
+| factor_a | INTEGER | NN; FK -> factors.factor_id CASCADE; IDX |
+| factor_b | INTEGER | NN; FK -> factors.factor_id CASCADE; IDX |
+
+### `match_scores`
+The similarity of a matched pair under each metric, with its runner-up context.
+
+- `runner_up` is the largest |value| among the unmatched cells in factor_a's row and factor_b's
+  column.
+- `margin` = |value| − runner_up. Positive means the match is clearly better than any
+  alternative.
+- Metrics: cosine, pearson and spearman for factor methods; jaccard for WGCNA.
+
+| Column | Type | Attributes |
+|---|---|---|
+| match_id | INTEGER | PK (with metric); FK -> factor_matches.match_id CASCADE |
+| metric | TEXT | PK (with match_id); CHECK IN ('cosine','pearson','spearman','jaccard') |
+| value | REAL | NN; signed |
+| runner_up | REAL | NULL when the fit pair has no unmatched cell in that row/column |
+| margin | REAL | |
+
+### `fit_pair_null`
+Background ("null") distribution of the unmatched cells of one fit pair under one metric: the
+similarity level a non-match reaches.
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_pair_id | INTEGER | PK (with metric); FK -> fit_pairs.fit_pair_id CASCADE |
+| metric | TEXT | PK (with fit_pair_id); CHECK IN ('cosine','pearson','spearman','jaccard') |
+| n | INTEGER | NN; number of unmatched cells |
+| mean | REAL | |
+| sd | REAL | |
+| median | REAL | |
+| p95 | REAL | |
+| max | REAL | |
+
+### `similarity_histograms`
+Fixed-bin histograms (20 bins over |value| in [0, 1]) of matched and unmatched cells, pooled over
+all fit pairs of a method at one pair of levels.
+
+- `level` is `rank` for factor methods and `power` for WGCNA, with `level_a <= level_b`.
+- These are the plotted distributions behind `fit_pair_null`.
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK (all of: dataset_id, method, level_a, level_b, metric, bin); FK -> datasets.dataset_id CASCADE |
+| method | TEXT | PK; FK -> methods.method |
+| level_a | INTEGER | PK |
+| level_b | INTEGER | PK |
+| metric | TEXT | PK; CHECK IN ('cosine','pearson','spearman','jaccard') |
+| bin | INTEGER | PK; 1–20 |
+| bin_lo | REAL | NN |
+| bin_hi | REAL | NN |
+| n_matched | INTEGER | NN |
+| n_unmatched | INTEGER | NN |
+
+## WGCNA tables
+
+### `gene_modules`
+One row per gene per WGCNA fit: its module assignment (0 = unassigned) and its own-module kME,
+with context.
+
+- `next_module` / `kme_next` are the gene's best competing module.
+- `p_analytic` is the Fisher-z p-value of `kme_own` with n = `datasets.n_samples`, as in
+  `WGCNA::corPvalueStudent`.
+- `p_perm` is the empirical p-value of `kme_own` against the module's permutation null (see
+  `module_kme_summary`).
+- The full genes × modules kME matrix is the fit's `kme` artifact.
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_id | INTEGER | PK (with gene); FK -> fits.fit_id CASCADE; IDX (fit_id, module) |
+| gene | TEXT | PK (with fit_id) |
+| module | INTEGER | NN; 0 = unassigned |
+| kme_own | REAL | NULL for module 0 |
+| next_module | INTEGER | |
+| kme_next | REAL | |
+| margin | REAL | kme_own − kme_next |
+| p_analytic | REAL | |
+| p_perm | REAL | |
+
+### `module_kme_summary`
+Summary of kME against one module's eigengene, for three groups:
+- `member`: genes in the module;
+- `nonmember`: all other genes, the empirical background;
+- `permutation`: all genes against `n_perm` sample-shuffled copies of the eigengene (the
+  permutation null; default 100 permutations, seeded from `fit_key`).
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_id | INTEGER | PK (with module, grp); FK -> fits.fit_id CASCADE |
+| module | INTEGER | PK |
+| grp | TEXT | PK; CHECK IN ('member','nonmember','permutation') |
+| n | INTEGER | NN |
+| mean | REAL | |
+| sd | REAL | |
+| median | REAL | |
+| p95 | REAL | |
+| p99 | REAL | |
+
+### `module_kme_histograms`
+Fixed-bin kME histograms (40 bins on [−1, 1]) for the same three groups, used to plot a gene's
+kME against its context.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_id | INTEGER | PK (with module, grp, bin); FK -> fits.fit_id CASCADE |
+| module | INTEGER | PK |
+| grp | TEXT | PK; CHECK IN ('member','nonmember','permutation') |
+| bin | INTEGER | PK; 1–40 |
+| bin_lo | REAL | NN |
+| bin_hi | REAL | NN |
+| count | INTEGER | NN |
+
+### `wgcna_sft`
+Dataset-level scale-free-topology fit (`WGCNA::pickSoftThreshold`) per candidate power, used to
+choose the soft-thresholding power.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK (with power); FK -> datasets.dataset_id CASCADE |
+| power | INTEGER | PK |
+| sft_r_sq | REAL | |
+| slope | REAL | |
+| truncated_r_sq | REAL | |
+| mean_k | REAL | |
+| median_k | REAL | |
+| max_k | REAL | |
+
+### `gene_significance`
+Per-gene association with each sample-metadata field: Spearman for numeric fields, Kruskal–Wallis
+for categorical ones. Used for WGCNA gene-significance vs kME views.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK (with field, gene); FK -> datasets.dataset_id CASCADE |
+| field | TEXT | PK; sample-metadata column |
+| gene | TEXT | PK |
+| test | TEXT | NN; CHECK IN ('spearman','kruskal') |
+| statistic | REAL | |
+| p_value | REAL | |
+
+## ICA / ICASSO tables
+
+ICASSO clusters the components of all ICA fits (seeds and bootstrap resamples) at one rank, to
+assess which components recur.
+
+
+### `icasso_clusters`
+One row per ICASSO cluster at a rank.
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK (with rank, cluster_id); FK -> datasets.dataset_id CASCADE |
+| rank | INTEGER | PK |
+| cluster_id | INTEGER | PK |
+| iq | REAL | cluster quality index (Iq) |
+| n_members | INTEGER | NN |
+| centrotype_factor_id | INTEGER | FK -> factors.factor_id CASCADE |
+| dendro_file | TEXT | relative path of the rank's dendrogram (same value on each row of a rank) |
+
+### `icasso_membership`
+Which ICASSO cluster each ICA component belongs to at its rank.
+
+| Column | Type | Attributes |
+|---|---|---|
+| factor_id | INTEGER | PK; FK -> factors.factor_id CASCADE |
+| dataset_id | TEXT | NN; FK (with rank, cluster_id) → icasso_clusters CASCADE |
+| rank | INTEGER | NN |
+| cluster_id | INTEGER | NN |
+| intra_sim | REAL | the component's mean \|cosine\| to the other members of its cluster |
+
+## Enrichment tables
+
+### `enrichment_queries`
+One row per enrichment query run for a factor: which test, and which gene direction.
+
+- GSEA-type queries (`fgsea`, `gsea`) use `direction = 'both'`; a hit's sign comes from its NES.
+- ORA-type queries are per direction.
+
+| Column | Type | Attributes |
+|---|---|---|
+| query_id | INTEGER | PK |
+| factor_id | INTEGER | NN; FK -> factors.factor_id CASCADE; UQ (factor_id, query_type, direction) |
+| query_type | TEXT | NN; 'fgsea' (Hallmark GSEA), 'gsea' (GSEA against the other collections), 'cogaps_fora' (CoGAPS marker-gene ORA), 'ora' (top-100-gene ORA; WGCNA module ORA) |
+| direction | TEXT | NN; CHECK IN ('pos','neg','both') |
+| query_size | INTEGER | genes in the query set (ORA) / ranked list length (GSEA) |
+| queried_at | TEXT | NN |
+
+### `enrichment_results`
+One row per enriched term for a query. ORA-only and GSEA-only columns are NULL for the other
+type.
+
+| Column | Type | Attributes |
+|---|---|---|
+| query_id | INTEGER | PK (with term_id); FK -> enrichment_queries.query_id CASCADE |
+| term_id | TEXT | PK |
+| source | TEXT | NN; MSigDB collection: 'HALLMARK', 'GO:BP', 'GO:MF', 'KEGG', 'REAC' or 'WP' |
+| term_name | TEXT | |
+| p_value | REAL | NN; fgsea's BH-adjusted p (`padj`); only terms with padj < 0.05 are stored; IDX (query_id, p_value) |
+| intersection_size | INTEGER | |
+| term_size | INTEGER | |
+| nes | REAL | GSEA only |
+| es | REAL | GSEA only |
+| log2err | REAL | GSEA only |
+| is_main_pathway | INTEGER | boolean; fgsea `collapsePathways` |
+
+The overlap / leading-edge genes of each result are in the dataset's `enrichment_genes`
+artifact.
+
+## Cross-dataset tables
+
+Loaded by `load_cross_dataset()` after every dataset, so fit ids on both sides are resolvable.
+
+### `projections`
+projectR projection of a source fit's loadings onto another dataset's matrix, either a related
+timepoint (`within_dataset`) or another cohort (`cross_dataset`).
+
+- The projected matrix is in the file at `path`.
+- **Scores.** projectR's R² is taken against the raw expression, which the mean expression
+  profile alone scores about 0.93 on (a cross-family projection also fits an intercept), so it
+  is not stored; each projection's per-sample values are in the file at `path`. The stored
+  scores are centred: the target is centred by its gene means and sample offsets, the loadings
+  columns are centred, no intercept is fitted, and the R² is pooled over the target
+  (`transfer_r2`). `native_r2` is the most any basis of the same size could explain (the
+  target's own top principal components), `relative_r2 = transfer_r2 / native_r2` is the score
+  to compare across methods and projection types, and `null_r2` is `transfer_r2` with the
+  loadings' genes shuffled (about 0). All loadings columns are used (`n_components`; PCA: its
+  maximum rank).
+
+| Column | Type | Attributes |
+|---|---|---|
+| projection_id | INTEGER | PK |
+| source_fit_id | INTEGER | NN; FK -> fits.fit_id CASCADE; UQ (source_fit_id, target_dataset_id, include_intercept) |
+| target_dataset_id | TEXT | NN; FK -> datasets.dataset_id CASCADE; IDX |
+| projection_type | TEXT | NN; CHECK IN ('within_dataset','cross_dataset') |
+| include_intercept | INTEGER | NN; boolean |
+| n_genes_matched | INTEGER | |
+| n_samples | INTEGER | |
+| mean_pval | REAL | |
+| median_pval | REAL | |
+| mean_pvar | REAL | |
+| median_pvar | REAL | |
+| n_components | INTEGER | loadings columns used by the centred scores |
+| transfer_r2, native_r2, relative_r2, null_r2 | REAL | centred scores (see above); NULL when fewer than 50 genes match |
+| path | TEXT | NN; relative path of the projection result |
+
+### `gene_space_agreement`
+How similar two datasets' optimal fits of the same method are in gene space: the source fit's
+loadings are projected onto the target fit's (projectR, shared Ensembl genes), and the mean
+|matched projection| is reported. Computed in both directions for every pair of datasets in the
+same dataset family.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| source_fit_id | INTEGER | PK (with target_fit_id); FK -> fits.fit_id CASCADE |
+| target_fit_id | INTEGER | PK; FK -> fits.fit_id CASCADE |
+| n_genes_matched | INTEGER | NN |
+| mean_abs_diagonal | REAL | NN |
+
+## Representative-fit analyses
+
+These run on representative fits only (`fits.representative = 1`).
+
+### `pattern_drivers`
+projectionDriveR differential-gene results for one factor and one sample-metadata contrast. Full
+results are in the file at `path`.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| driver_id | INTEGER | PK |
+| factor_id | INTEGER | NN; FK -> factors.factor_id CASCADE; UQ (factor_id, grouping_col, group1_level, group2_level, mode) |
+| grouping_col | TEXT | NN |
+| group1_level | TEXT | NN |
+| group2_level | TEXT | NN |
+| mode | TEXT | NN; CHECK IN ('CI','PV') |
+| n_genes_considered | INTEGER | |
+| n_significant_shared | INTEGER | |
+| path | TEXT | NN |
+| computed_at | TEXT | NN |
+
+### Pattern markers
+Marker genes per factor (patternMarkers-style scores), used to diagnose "too many patterns" (a
+factor with no markers), are the dataset's `pattern_markers` artifact; their count per
+fit is `fit_redundancy.n_factors_with_no_markers`.
+
+### `fit_redundancy`
+Within-fit redundancy summary: off-diagonal cosine between a fit's own factors, and the number of
+factors with no marker genes. The full K × K matrix is the fit's `redundancy` artifact.
+
+
+| Column | Type | Attributes |
+|---|---|---|
+| fit_id | INTEGER | PK; FK -> fits.fit_id CASCADE |
+| max_offdiag_cosine | REAL | |
+| median_offdiag_cosine | REAL | |
+| n_factors_with_no_markers | INTEGER | |
+
+## Repeated-measures tables
+
+Present for every dataset with a design and, from the parent's design, for its per-timepoint
+subsets.
+
+### `dataset_design`
+The design behind a dataset's repeated-measures results.
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK; FK -> datasets.dataset_id CASCADE |
+| parent_dataset_id | TEXT | NN; the dataset whose design applies (itself, or a subset's parent) |
+| is_subset | INTEGER | NN; boolean |
+| platform | TEXT | 'array' or 'rnaseq' |
+| subject_col, time_col, group_col | TEXT | sample-metadata columns |
+| time_order | TEXT | JSON array, chronological |
+| covariates, technical_covariates | TEXT | JSON arrays (technical: the variance-model-only covariates, e.g. `control_factor`) |
+| vp_formula, dream_formula | TEXT | the parent's model formulas |
+| n_samples, n_subjects, n_dropped | INTEGER | samples in the design, distinct subjects, samples dropped (parents only) |
+
+### `samples`
+One row per sample in the design: its design values and sample-level checks. Subset rows come from
+the parent's analysis (PCs and expression statistics are the parent's).
+
+| Column | Type | Attributes |
+|---|---|---|
+| dataset_id | TEXT | PK (with sample_id); FK -> datasets.dataset_id CASCADE |
+| sample_id | TEXT | PK |
+| subject, timepoint, grp, cell | TEXT | design values (`cell` = group × time) |
+| expr_mean, expr_sd, expr_q10, expr_median, expr_q90 | REAL | the sample's expression distribution (model input scale) |
+| pc1, pc2, pc3 | REAL | sample scores on the expression PCs |
+| neutrophil_score, lymphocyte_score, nl_score | REAL | marker scores (z-scored within dataset); nl = neutrophil − lymphocyte |
+| control_mean | REAL | mean of the array's control probes (arrays) |
+| control_factor | REAL | the control probes' first PC, standardized (datasets with `control_probes: {covariate: true}`) |
+| log2_lib_size, norm_factor | REAL | RNA-seq library size and TMM factor |
+| chrY_score, xist | REAL | sex-gene expression |
+| inferred_sex, recorded_sex | TEXT | 'F'/'M' |
+
+### `variance_summary`
+One row per dataset with its own design: the headline repeated-measures numbers.
+
+- **Fit:** n_genes, n_genes_failed, n_factor_genes (genes the factor analysis uses), share_singular,
+  max_colinearity, dupcor_consensus (limma's genome-wide subject correlation).
+- **Gene-level shares:** between_median, time_median, residual_median, technical_median
+  (median over genes; between = subject + subject-level variables, time = time + group × time);
+  repeatability_median (between / (between + residual)); time_within_median (time / (time +
+  residual)); share_time_gt05/10/20 (genes with time above 5/10/20%).
+- **Variance-weighted shares:** `between_vw_*`, `time_vw_*`, `residual_vw_*` over all genes
+  (`_all`), the factor-analysis genes (`_factor_genes`) and the top 8,000 by variance (`_top`).
+- **Within-person change** (subjects sampled more than once; each later sample minus the
+  subject's first): n_subjects_repeated, n_changes, change_pc1_share (share of the change on its
+  first PC), change_pc1_cor_nl, median_r2_nl_all / _factor_genes and median_r2_technical_all /
+  _factor_genes (median R² of each gene's change against the change in composition or in the
+  technical covariates).
+- **Sample checks:** rho_pc1_nl, rho_sd_nl, rho_mean_nl (Spearman, against the
+  neutrophil-lymphocyte score), rho_sd_technical, rho_mean_technical (against control mean or
+  library size), n_control_probes, control_probes (which), control_factor_fraction,
+  sex_separation, sex_agreement, n_subjects_sex_discordant, nl_subject_fraction,
+  nl_time_fraction, nl_group_fraction.
+- **Run:** vp_seconds, dream_seconds, fitted_at.
+
+### `variance_terms`, `variance_categories`, `variance_bins`
+- **variance_terms** (dataset_id, term): each model term's category ('subject', 'subject-level',
+  'time', 'group x time', 'group', 'technical', 'covariate', 'residual', or 'derived' for the
+  between-subject and time totals) and its distribution over genes: n_genes, mean, q10, median,
+  q90, share_gt05, share_gt10.
+- **variance_categories** (dataset_id, category): present, mean, median, and variance-weighted
+  shares vw_all, vw_factor_genes, vw_top.
+- **variance_bins** (dataset_id, binning, bin): median between-subject (`between_subject`), time and residual fractions by
+  expression quartile (`binning = 'expression_quartile'`, Q1 = lowest) and by variance rank
+  (`'variance_rank'`).
+
+### `trait_variance`, `composition_correlations`
+- **trait_variance** (dataset_id, trait, term): the sample-level traits (expression mean/sd/q90,
+  PC1–3, marker scores, control mean, library size, TMM factor) through the dataset's variance
+  formula: fraction and category per term.
+- **composition_correlations** (dataset_id, x, y): Spearman rho and p-value between every pair of
+  those traits.
+
+### `de_contrasts`
+One row per dream contrast or joint test (dataset_id, contrast): kind ('pairwise' or 'omnibus'),
+readable (the levels compared, or the contrasts tested jointly), n_genes, n_fdr05. Full tables are
+the `de_results` artifact.
+
+### `factor_variance`, `factor_variance_models`
+- **factor_variance** (factor_id, term): every fitted factor's sample scores through the dataset's
+  variance formula (a subset: its parent's, without subject and time): category and fraction per
+  term. FK -> factors.factor_id CASCADE. 
+- **factor_variance_models** (dataset_id, method): the formula used and the number of factors.
+
+### `variance_time_genes`, `time_gene_recurrence`
+- **variance_time_genes** (dataset_id, symbol): genes with time + group × time above 10% of their
+  variance, with their time (`time_all`) and between-subject (`between_subject`) fractions.
+- **time_gene_recurrence** (symbol): in how many datasets, and which, a gene is time-driven.
+
+## Views (`views.sql`)
+
+| View | Purpose |
+|---|---|
+| `v_fits` | `fits` joined to `methods.family`, with the common `fit_params` (para, lambda, power, alpha) pivoted to columns |
+| `v_factor_matches` | `factor_matches` + `match_scores` in both orientations (a→b and b→a), joined to fit and factor ids, rank, seed and dataset, so per-fit/per-factor stability queries need no direction UNION |
+| `v_ingest_summary` | per (dataset, method): family, n_fits, n_ok, n_failed, last written_at; replaces the `ingests` table |

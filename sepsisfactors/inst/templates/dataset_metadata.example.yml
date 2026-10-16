@@ -1,0 +1,193 @@
+# Example dataset_metadata.yml.
+#
+# Describes ONE dataset run against ONE input matrix, resolved one of three
+# ways (first match wins; load_input_matrix()):
+#   1. dataset.matrix_path is set               -> read that RDS matrix as-is.
+#   2. dataset.preprocessing_script is set      -> run your script against
+#                                                   the raw parquet trio.
+#   3. neither is set                           -> pivot dataset.expression_path
+#                                                   (long format) wide, no
+#                                                   other transformation.
+#
+# There's no post-hoc sample/feature filtering step: if a matrix needs
+# restricting to a subset, do it inside a preprocessing_script (mode 2) or
+# bake it into the matrix itself (mode 1).
+#
+# If you want to run several subsets separately (e.g. per timepoint, per
+# tissue), write one config per matrix/script, each with its own
+# dataset.id, and add each id to `datasets:` in pipeline.yml --
+# there's no built-in "multiple matrices in one config" concept.
+#
+# `methods:` holds each method's parameter grid. SLURM resources are not
+# per dataset: they live in pipeline.yml's `controllers:`. Method
+# parameter names are the fitting function's own argument names.
+
+dataset:
+  id: sepsis_day0                                    # unique per matrix/run
+  description: >
+    Whole-blood RNA-seq, Day 0 samples only, from a sepsis cohort deposited
+    as a HuggingFace collection (long-format expression + sample metadata +
+    feature metadata parquet trio).
+  hf_collection: "org/sepsis-timecourse-rnaseq"       # documentation only
+
+  # Mode 1: uncomment to use an already-built matrix directly, skipping
+  # both the raw parquet trio and any preprocessing_script.
+  # matrix_path: results/matrices/sepsis_day0.rds
+
+  # Raw parquet trio -- always recorded for provenance. Required for
+  # resolution mode 3 (default pivot); passed through to your script
+  # unchanged for mode 2 (preprocessing_script). Also used by the stage-2
+  # stability app's metadata drill-down.
+  expression_path: data/raw/expression.parquet
+  sample_metadata_path: data/raw/sample_metadata.parquet
+  feature_metadata_path: data/raw/feature_metadata.parquet
+  sample_id_col: sample_id
+  feature_id_col: feature_id
+  value_col: value
+
+  # THE canonical cross-dataset identifier for all COMPUTATIONAL work
+  # (enrichment and projectR; see
+  # build_ensembl_map()/remap_to_ensembl()) -- names
+  # the feature_metadata_path column holding this dataset's Ensembl gene
+  # id. Every dataset's matrix rownames get remapped into this space
+  # (version suffix stripped, e.g. ENSG00000001234.2 -> ENSG00000001234)
+  # before cross-dataset comparison, since native platform ids
+  # (probe/Entrez/etc.) otherwise never match across datasets. Also
+  # passed through unchanged to preprocessing_script (mode 2). A dataset
+  # missing this (or pointed at a nonexistent column) keeps its native
+  # ids while every successfully-mapped dataset becomes Ensembl, so
+  # cross-dataset comparisons against it intersect on ~nothing -- surfaces
+  # as projectR's "0 row names matched between data and loadings" rather
+  # than an error, so it's worth verifying this resolves correctly for
+  # any dataset involved in cross-dataset work.
+  ensembl_col: ensembl
+
+  # Optional, DISPLAY ONLY -- never used for the actual cross-dataset
+  # computational matching (see ensembl_col above for that). Names the
+  # feature_metadata_path column holding this dataset's gene SYMBOL, for
+  # showing recognizable gene names in the app. Without this, the symbol
+  # column is GUESSED from a fixed list of common names (symbol/
+  # gene_symbol/SYMBOL/Symbol) -- set this explicitly if your feature
+  # metadata spells it differently (e.g. gene_name, external_gene_name,
+  # hgnc_symbol).
+  # symbol_col: gene_name
+
+  # Optional -- a column of sample_metadata_path identifying which SUBJECT
+  # (person) a sample belongs to. Links a person's samples across sibling
+  # per-timepoint datasets, and keeps them together when fits resample
+  # (fit_subjects()). A design: block's
+  # `subject` takes precedence.
+  # subject_id_col: subject_id
+
+  # Mode 2: uncomment to run your own script instead of the default pivot.
+  # The script must write file.path(tmp_dir, "matrix.rds"); the variables
+  # it can use are set by run_preprocessing_script(). Any
+  # sample/feature filtering belongs in the script, not as a separate
+  # post-hoc id list.
+  # preprocessing_script: preprocess.R
+
+# Optional: the study design for variancePartition and dream
+#. A dataset with this block gets the
+# design_/expr_/norm_/vp_/dream_/vp_summary_<dataset> targets. Columns are
+# sample-metadata columns and must be syntactic R names.
+#   platform:   array (log-scale values, one probe per symbol, no variance
+#               filter) or rnaseq (counts -> filterByExpr -> TMM -> voom
+#               weights)
+#   subject:    person id; omit for a cross-sectional dataset
+#   time:       timepoint column; time_order lists its levels chronologically
+#               (required with time)
+#   group:      disease arm / subphenotype; cells are group x time.
+#               group_at_first_time: true gives every sample its subject's
+#               first-timepoint group (for a status that changes over time)
+#   covariates: further variables in the variance model (categorical ones as
+#               random effects); numeric: the covariates fitted as numbers
+#   drop/keep:  {column: [values]} sample filters; set_na: {column: [values]}
+#               recoded to missing; recode: {column: {from: to}}. "NA", "" and NA are missing; samples
+#               missing any model variable are dropped and counted.
+#   contrasts:  cross-sectional only, {name: "levelA - levelB"}; default is
+#               every pairwise group comparison. Time courses test each
+#               timepoint against the first, within each group.
+#   vp_covariates: numeric covariates for the variance model only (e.g.
+#               technical QC metrics); also list them under numeric
+#   de_covariates: fixed-effect covariates added to the dream formula
+#   control_probes: technical reference probes for the composition check
+#: {id_pattern: "<regex>"} on
+#               feature ids, or {column: <feature metadata column>,
+#               values: [...]}. Arrays only. Add covariate: true to use the
+#               controls' first principal component as a covariate
+#               (control_factor) in the variance and dream models.
+# design:
+#   platform: array
+#   subject: patient_id
+#   time: timepoint
+#   time_order: ["Day 1", "Day 3"]
+#   group: disease
+#   covariates: [sex, age]
+#   numeric: [age]
+
+methods:
+  pca:
+    rank: [2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+
+  nmf:
+    k: [5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]   # NNLM::nnmf()'s real rank argument
+    # seed: [...]   # uses the nmf method's own 10-seed default unless overridden
+    # any other nnmf() argument (alpha, beta, method, loss, max.iter,
+    # ...) can be added here IF the nmf method's build_grid() is
+    # extended to reference it (unlike the old scheme, this is no
+    # longer automatic pass-through).
+
+  cogaps:
+    # CogapsParams()'s own arguments (nPatterns, seed, nIterations,
+    # distributed, alphaA, alphaP, ...) live directly under `params:`
+    # here; `distributed_params`/`run` are separate sibling keys
+    # (setDistributedParams()/CoGAPS()'s own distinct argument sets) --
+    # see the cogaps method. Unlike every other method, this nesting is
+    # intrinsic to CoGAPS's three call sites, not a schema wrapper.
+    params:
+      nPatterns: [5, 6, 7, 8, 9, 10]
+      seed: [42, 123, 456, 7, 99, 2024, 8675309, 271828, 31415, 90210]
+      nIterations: 15000
+      distributed: genome-wide
+    # distributed_params: {}   # nSets defaults to the cogaps controller's cpus_per_task
+    # run: {}                  # nThreads defaults to the cogaps controller's cpus_per_task
+
+  # sPCA (elasticnet::spca()) -- config keys are spca()'s own argument
+  # names (K, sparse, use.corr, lambda, max.iter, eps.conv) plus the
+  # sparsity search (para = fraction of genes non-zero per component under
+  # sparse = "varnum"): a scan at one K (`K_scan`, default 5, must be one of
+  # K) over `para_scan` (default 0.2, 0.3, 0.4, 0.5), then every K at the
+  # scan's Index-of-Sparseness winner +/- `para_step` (default 0.05)
+  # (Guerra-Urzola et al. 2021; the spca method). `lambda` is a single
+  # value, not swept -- it made no practical difference under varnum. Omit
+  # any of these to use the defaults.
+  # Deterministic given (K, para) -- no seed.
+  spca:
+    K: [2,3,4,5,6,7,8,9,10,11,12]
+    sparse: varnum
+    # K_scan: 5
+    # para_scan: [0.2, 0.3, 0.4, 0.5]
+    # para_step: 0.05
+    # lambda: 0.000001
+
+  # ICA (fastICA::fastICA()) -- config keys are fastICA()'s own argument
+  # names (n.comp, alpha, fun, alg.typ, maxit, tol) plus `seed` (a real
+  # swept column, passed to set.seed() before the call -- fastICA has no
+  # seed argument of its own, same idiom as NMF's `seed`). Unlike PCA/
+  # sPCA, fastICA's random initialization means this genuinely needs a
+  # seed sweep for cross-seed factor stability (see the ica method).
+  # fastICA's own `method` argument is fixed to "C" internally, not a
+  # config key. `alpha` MUST stay a single static value -- the ica
+  # method's build_grid() errors if you try to sweep it (it would break the
+  # same-rank comparison across seeds).
+  ica:
+    n.comp: [5, 7, 10, 15, 20]
+    seed: [42, 123, 456, 7, 99, 2024, 8675309, 271828, 31415, 90210]
+    # alpha: 1   # uses the ica method's own default (1) unless overridden -- must stay length 1
+
+  network:
+    wgcna:
+      power: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20]
+      minModuleSize: 30
+      mergeCutHeight: 0.25
+      networkType: signed

@@ -1,0 +1,70 @@
+dataset:
+  id: GSE273700
+  description: >
+    All samples and features from GSE273700
+  hf_collection: "cmatkhan/Sepsis transcriptomics"       # documentation only
+
+  expression_path: GSE273700/expression.parquet
+  sample_metadata_path: GSE273700/sample_metadata.parquet
+  feature_metadata_path: GSE273700/feature_metadata.parquet
+  sample_id_col: sample_id
+  # CORRECTED: previously set to GeneID, with a comment claiming
+  # feature_metadata.parquet's key column was GeneID (Entrez) and that no
+  # "feature_id" column existed at all. Re-verified directly against both
+  # parquet files (2026-09-14): there is NO GeneID column anywhere --
+  # feature_metadata.parquet's columns are feature_id/symbol/entrezid/
+  # genebiotype/seqname/geneseqstart/geneseqend/seqstrand, and
+  # expression.parquet's are feature_id/sample_id/value. feature_id here
+  # is itself an Ensembl gene id (e.g. "ENSG00000000003") -- also what
+  # preprocess.R actually pivots/joins on
+  # (`pivot_wider(id_cols = feature_id, ...)`, `raw$feature$feature_id`),
+  # contradicting the old comment. The previous comment's claim that this
+  # was already fixed once (mirroring GSE110487_config.yml, which
+  # legitimately does use GeneID) was itself the bug -- GSE110487 and
+  # GSE273700 do not share a schema.
+  feature_id_col: feature_id
+  value_col: value
+  ensembl_col: feature_id
+  symbol_col: symbol
+  # `patient_id` repeats per subject across the DAY1/DAY8 timepoints (104
+  # samples / 52 subjects, all with exactly 2 -- confirmed directly
+  # against sample_metadata.parquet). Registered so the app can join
+  # projectR's within-family projections (GSE273700 -> GSE273700_DAY1/DAY8)
+  # back to real subjects for trajectory views.
+  subject_id_col: patient_id
+
+  preprocessing_script: preprocess.R
+
+# Study design for the variance module.
+design: {platform: rnaseq, subject: patient_id, time: timepoint, time_order: [Day1, Day8]}
+
+methods:
+  pca:
+    rank: [2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+
+  nmf:
+    k: [5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+    seed: [42, 123, 456, 7, 99, 2024, 8675309, 271828, 31415, 90210]
+
+  cogaps:
+    params:
+      nPatterns: [5, 6, 7, 8, 9, 10]
+      seed: [42, 123, 456, 7, 99, 2024, 8675309, 271828, 31415, 90210]
+      nIterations: 15000
+      distributed: genome-wide
+
+  spca:
+    K: [2,3,4,5,6,7,8,9,10,11,12]
+    sparse: varnum
+
+  ica:
+    n.comp: [5, 7, 10, 15, 20]
+    seed: [42, 123, 456, 7, 99, 2024, 8675309, 271828, 31415, 90210]
+    # alpha: uses the ica default (1); it must stay a single value
+
+  network:
+    wgcna:
+      power: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20]
+      minModuleSize: 30
+      mergeCutHeight: 0.25
+      networkType: signed

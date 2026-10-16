@@ -1,0 +1,74 @@
+dataset:
+  id: ROSE
+  description: >
+    All samples and features from ROSE. NOTE: note on huggingface as this is private
+  hf_collection: "dbGAP"       # documentation only
+
+  expression_path: ROSE/rose_counts.parquet
+  sample_metadata_path: ROSE/rose_sample_meta.parquet
+  feature_metadata_path: ROSE/rose_feature_meta.parquet
+  sample_id_col: sample_id
+  # CORRECTED 2026-09-18: this comment previously claimed the key column
+  # was "GeneID" (Entrez) and that "feature_id" doesn't exist at all --
+  # confirmed directly against the CURRENT data/rose_feature_meta.parquet
+  # that this is simply wrong: its actual columns are feature_id/seqnames/
+  # start/end/width/strand/symbol/biotype (no GeneID column exists), and
+  # the already-cached matrix's own rownames are Ensembl gene ids
+  # (ENSG...), matching "feature_id" exactly -- same convention as
+  # the ROSE_DAY2 dataset config, whose OWN comments
+  # already correctly use feature_id_col: feature_id. With the stale
+  # "GeneID" value, build_ensembl_map()
+  # couldn't find that column at all and silently returned NULL --
+  # cross-dataset work (fgsea_grid/projectr_*_grid) for
+  # this specific dataset was comparing un-remapped native ids the whole
+  # time as a result.
+  feature_id_col: feature_id
+  value_col: value
+  ensembl_col: feature_id
+  symbol_col: symbol
+  # `subject_number` (NOT patient_id -- ROSE has no such column) repeats
+  # per subject across the DAY0/DAY2 timepoints (221 samples / 128
+  # subjects; 93 have 2, 35 have only 1 -- confirmed directly against the
+  # cached sample metadata). Registered so the app can join projectR's
+  # within-family projections (ROSE -> ROSE_DAY0/DAY2) back to real
+  # subjects for trajectory views.
+  subject_id_col: subject_number
+
+  preprocessing_script: preprocess.R
+
+# Study design for the variance module.
+# class is the Hyper/Hypo-inflammatory subphenotype. vp_covariates: the
+# technical sequencing QC metrics, variance model only (p_usable left out:
+# it is exactly 100 - p_rrna).
+design: {platform: rnaseq, subject: subject_number, time: timepoint, time_order: ["Day 0", "Day 2"], group: class, covariates: [gender, scr_age], vp_covariates: [n_processed, p_pseudoaligned, p_rrna, p_mtrrna, p_ercc, frag_len], numeric: [scr_age, n_processed, p_pseudoaligned, p_rrna, p_mtrrna, p_ercc, frag_len]}
+
+methods:
+  pca:
+    rank: [2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+
+  nmf:
+    k: [5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+    seed: [42, 123, 456, 7, 99, 2024, 8675309, 271828, 31415, 90210]
+
+  cogaps:
+    params:
+      nPatterns: [5, 6, 7, 8, 9, 10]
+      seed: [42, 123, 456, 7, 99, 2024, 8675309, 271828, 31415, 90210]
+      nIterations: 15000
+      distributed: genome-wide
+
+  spca:
+    K: [2,3,4,5,6,7,8,9,10,11,12]
+    sparse: varnum
+
+  ica:
+    n.comp: [5, 7, 10, 15, 20]
+    seed: [42, 123, 456, 7, 99, 2024, 8675309, 271828, 31415, 90210]
+    # alpha: uses the ica default (1); it must stay a single value
+
+  network:
+    wgcna:
+      power: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20]
+      minModuleSize: 30
+      mergeCutHeight: 0.25
+      networkType: signed
